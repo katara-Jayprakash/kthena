@@ -31,8 +31,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/clientcmd"
 )
 
 const (
@@ -44,7 +42,7 @@ const (
 func TestModelCR(t *testing.T) {
 	ctx := context.Background()
 	// Initialize Kubernetes clients
-	config, err := getKubeConfig()
+	config, err := utils.GetKubeConfig()
 	require.NoError(t, err, "Failed to get kubeconfig")
 	kthenaClient, err := clientset.NewForConfig(config)
 	require.NoError(t, err, "Failed to create kthena client")
@@ -70,17 +68,6 @@ func TestModelCR(t *testing.T) {
 	}
 	utils.CheckChatCompletions(t, "test-model", messages)
 	// todo: test update modelBooster, delete modelBooster
-}
-
-func getKubeConfig() (*rest.Config, error) {
-	// Try in-cluster config first
-	config, err := rest.InClusterConfig()
-	if err == nil {
-		return config, nil
-	}
-
-	// Fall back to kubeconfig
-	return clientcmd.BuildConfigFromFlags("", clientcmd.RecommendedHomeFile)
 }
 
 func createTestModel() *workload.ModelBooster {

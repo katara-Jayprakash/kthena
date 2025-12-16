@@ -210,11 +210,51 @@ func (c *ModelServerController) syncModelServerHandler(key string) error {
 
 	_ = c.store.AddOrUpdateModelServer(ms, pods)
 
-	// Re-enqueue all matching pods to ensure they are associated with this ModelServer
+	// Get already bound pods to avoid unnecessary updates
+	existingPods, err := c.store.GetPodsByModelServer(utils.GetNamespaceName(ms))
+	if err != nil {
+		klog.V(4).Infof("failed to get existing pods for ModelServer %s/%s: %v", ms.Namespace, ms.Name, err)
+	}
+
+	// Build a set of existing pod names for quick lookup
+	existingPodNames := sets.New[types.NamespacedName]()
+	for _, podInfo := range existingPods {
+		existingPodNames.Insert(utils.GetNamespaceName(podInfo.Pod))
+	}
+
+	// Only add or update pods that are not yet bound to the store
 	// This handles the case where pods became ready before the ModelServer was synced
 	for _, pod := range podList {
-		if isPodReady(pod) {
-			c.enqueuePod(pod)
+		if !isPodReady(pod) {
+			continue
+		}
+
+		podName := utils.GetNamespaceName(pod)
+		// Skip pods that are already properly bound
+		if existingPodNames.Contains(podName) {
+			continue
+		}
+
+		// Find all ModelServers that match this pod
+		modelServers, err := c.modelServerLister.ModelServers(pod.Namespace).List(labels.Everything())
+		if err != nil {
+			klog.Errorf("failed to list ModelServers for pod %s/%s: %v", pod.Namespace, pod.Name, err)
+			continue
+		}
+
+		servers := []*aiv1alpha1.ModelServer{}
+		for _, item := range modelServers {
+			selector, err := metav1.LabelSelectorAsSelector(&metav1.LabelSelector{MatchLabels: item.Spec.WorkloadSelector.MatchLabels})
+			if err != nil || !selector.Matches(labels.Set(pod.Labels)) {
+				continue
+			}
+			servers = append(servers, item)
+		}
+
+		if len(servers) > 0 {
+			if err := c.store.AddOrUpdatePod(pod, servers); err != nil {
+				klog.Errorf("failed to add or update pod %s/%s in data store: %v", pod.Namespace, pod.Name, err)
+			}
 		}
 	}
 
