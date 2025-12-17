@@ -72,7 +72,6 @@ Gateway API Inference Extension provides a standardized way to expose AI/ML infe
 
 - **Enables standardized inference routing**: Works with InferencePool and InferenceObjective resources
 - **Facilitates multi-gateway deployments**: Can work alongside other gateway implementations using the same API
-- **Provides model-aware routing**: Leverages inference-specific routing capabilities
 
 ### 4. Flexible Deployment Options
 
@@ -142,10 +141,10 @@ This example demonstrates how to use Gateway API with Kthena's native `ModelRout
 Deploy mock LLM services and their corresponding ModelServer resources:
 
 ```bash
-# Deploy DeepSeek 1.5B mock service (for default Gateway)
+# Deploy DeepSeek 1.5B mock service
 kubectl apply -f https://raw.githubusercontent.com/volcano-sh/kthena/main/examples/kthena-router/LLM-Mock-ds1.5b.yaml
 
-# Deploy DeepSeek 7B mock service (for new Gateway)
+# Deploy DeepSeek 7B mock service
 kubectl apply -f https://raw.githubusercontent.com/volcano-sh/kthena/main/examples/kthena-router/LLM-Mock-ds7b.yaml
 
 # Create ModelServer for DeepSeek 1.5B
@@ -198,11 +197,11 @@ Add the new port in `spec.ports`:
 spec:
   ports:
   - name: http
-    port: 8080
+    port: 80
     targetPort: 8080
     protocol: TCP
-  - name: http-8081  # Add new port
-    port: 8081
+  - name: http-81  # Add new port
+    port: 81
     targetPort: 8081
     protocol: TCP
 ```
@@ -276,10 +275,10 @@ Test the default Gateway (port 8080):
 ROUTER_IP=$(kubectl get service kthena-router -n kthena-system -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
 
 # If LoadBalancer is not available, use NodePort or port-forward
-# kubectl port-forward -n kthena-system service/kthena-router 8080:8080 8081:8081
+# kubectl port-forward -n kthena-system service/kthena-router 80:80 81:81
 
 # Test the default port
-curl http://${ROUTER_IP}:8080/v1/completions \
+curl http://${ROUTER_IP}:80/v1/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "deepseek-r1",
@@ -295,8 +294,8 @@ curl http://${ROUTER_IP}:8080/v1/completions \
 Test the new Gateway (port 8081):
 
 ```bash
-# Test port 8081
-curl http://${ROUTER_IP}:8081/v1/completions \
+# Test port 81
+curl http://${ROUTER_IP}:81/v1/completions \
   -H "Content-Type: application/json" \
   -d '{
     "model": "deepseek-r1",
