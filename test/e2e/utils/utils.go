@@ -48,4 +48,3 @@ func WaitForModelServingReady(t *testing.T, ctx context.Context, kthenaClient *c
 	})
 	require.NoError(t, err, "ModelServing did not become ready")
 }
-
