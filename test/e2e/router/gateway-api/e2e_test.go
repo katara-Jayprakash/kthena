@@ -20,9 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -226,25 +224,18 @@ func TestDuplicateModelName(t *testing.T) {
 			}
 		}
 		svc.Spec.Ports = ports
-		_, _ = testCtx.KubeClient.CoreV1().Services(kthenaNamespace).Update(cleanupCtx, svc, metav1.UpdateOptions{})
+		if _, err := testCtx.KubeClient.CoreV1().Services(kthenaNamespace).Update(cleanupCtx, svc, metav1.UpdateOptions{}); err != nil {
+			t.Logf("Warning: Failed to restore kthena-router Service during cleanup: %v", err)
+		}
 	})
 
 	// 4. Setup port-forward for port 8081
 	t.Log("Setting up port-forward for port 8081...")
-	pfCmd := exec.Command("kubectl", "port-forward", "-n", kthenaNamespace, "--address", "127.0.0.1", "svc/kthena-router", "8081:8081")
-	if err := pfCmd.Start(); err != nil {
-		t.Fatalf("Failed to start port-forward for 8081: %v", err)
-	}
+	cleanup, err := utils.SetupPortForward(kthenaNamespace, "kthena-router", "8081", "8081")
+	require.NoError(t, err, "Failed to setup port-forward for 8081")
 
 	// Register cleanup to kill port-forward
-	t.Cleanup(func() {
-		if pfCmd.Process != nil {
-			_ = pfCmd.Process.Kill()
-		}
-	})
-
-	// Wait a bit for port-forward to be ready
-	time.Sleep(2 * time.Second)
+	t.Cleanup(cleanup)
 
 	// 5. Create second ModelRoute with same modelName but bound to custom Gateway
 	t.Log("Creating second ModelRoute with same modelName bound to custom Gateway...")
@@ -273,9 +264,6 @@ func TestDuplicateModelName(t *testing.T) {
 			t.Logf("Warning: Failed to delete ModelRoute %s/%s: %v", createdModelRoute2.Namespace, createdModelRoute2.Name, err)
 		}
 	})
-
-	// Wait a bit for routes to be ready
-	time.Sleep(5 * time.Second)
 
 	// 6. Verify access through different ports routes to different models
 	t.Log("Verifying access through default Gateway (port 8080) routes to deepseek-r1-1-5b...")

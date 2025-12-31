@@ -24,10 +24,12 @@ import (
 	"runtime"
 	"strings"
 	"time"
+
+	"github.com/volcano-sh/kthena/test/e2e/utils"
 )
 
 var (
-	pfCmd *exec.Cmd
+	pfCleanup func()
 )
 
 // KthenaConfig holds the configuration for installing kthena
@@ -121,20 +123,13 @@ func InstallKthena(cfg *KthenaConfig) error {
 	// Setup port-forward to router service if networking is enabled
 	if cfg.NetworkingEnabled {
 		fmt.Println("Setting up port-forward to router service...")
-		pfCmd = exec.Command("kubectl", "port-forward", "-n", cfg.Namespace, "--address", "127.0.0.1", "svc/kthena-router", "8080:80")
-		if err := pfCmd.Start(); err != nil {
-			return fmt.Errorf("failed to start port-forward: %v", err)
+		var err error
+		pfCleanup, err = utils.SetupPortForward(cfg.Namespace, "kthena-router", "8080", "80")
+		if err != nil {
+			return fmt.Errorf("failed to setup port-forward: %v", err)
 		}
-
-		go func() {
-			// Wait for the command to finish to avoid zombie processes.
-			// The error is expected if the process is killed during cleanup.
-			if err := pfCmd.Wait(); err != nil {
-				fmt.Printf("port-forward command exited: %v\n", err)
-			}
-		}()
-		// Wait a bit for port-forward.
-		time.Sleep(2 * time.Second)
+		// Note: SetupPortForward already waits for the port-forward to be ready.
+		// Cleanup is handled by UninstallKthena via the global pfCleanup.
 	}
 
 	return nil
@@ -145,9 +140,9 @@ func UninstallKthena(namespace string) error {
 	fmt.Printf("Uninstalling kthena from namespace %s\n", namespace)
 
 	// Kill the port-forward process if it was started
-	if pfCmd != nil && pfCmd.Process != nil {
+	if pfCleanup != nil {
 		fmt.Println("Stopping port-forward process...")
-		_ = pfCmd.Process.Kill()
+		pfCleanup()
 	}
 
 	cmd := exec.Command("helm", "uninstall", "kthena", "--namespace", namespace)
