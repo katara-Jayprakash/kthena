@@ -64,7 +64,7 @@ func NewDefaultConfig() *KthenaConfig {
 // InstallKthena installs kthena via helm
 func InstallKthena(cfg *KthenaConfig) error {
 	if cfg.ImageTag == "" {
-		cfg.ImageTag = "1.0.0"
+		cfg.ImageTag = "latest"
 	}
 
 	args := []string{

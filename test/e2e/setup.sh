@@ -18,7 +18,7 @@ set -e
 
 HUB=${HUB:-ghcr.io/volcano-sh}
 # Tag for e2e test
-TAG=${TAG:-1.0.0}
+TAG=${TAG:-latest}
 CLUSTER_NAME=${CLUSTER_NAME:-kthena-e2e}
 
 # Create Kind cluster
