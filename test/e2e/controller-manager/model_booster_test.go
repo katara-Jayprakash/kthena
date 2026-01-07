@@ -59,6 +59,13 @@ func TestModelCR(t *testing.T) {
 	// TODO(user): Add tests for updating and deleting ModelBooster
 }
 
+func createValidModelBoosterForWebhookTest() *workload.ModelBooster {
+	model := createTestModel()
+	model.Name = "webhook-test-model"
+	model.Spec.Name = "webhook-test-model"
+	return model
+}
+
 func createTestModel() *workload.ModelBooster {
 	// Create a simple config as JSON
 	config := &apiextensionsv1.JSON{}

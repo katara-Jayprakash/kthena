@@ -45,7 +45,7 @@ func TestWebhook(t *testing.T) {
 		},
 		{
 			name:        "Valid ModelBooster (DryRun)",
-			resource:    createTestModel(),
+			resource:    createValidModelBoosterForWebhookTest(),
 			expectError: false,
 		},
 		{
