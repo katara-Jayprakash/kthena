@@ -322,7 +322,7 @@ func buildCommands(workerConfig *apiextensionsv1.JSON, modelDownloadPath string,
 		if kvConnector == "MooncakeConnector" {
 			commands = []string{"bash", "-c", "pip install mooncake-transfer-engine && " + strings.Join(commands, " ")}
 		} else if kvConnector == "NixlConnector" {
-			commands = []string{"bash", "-c", "pip install nixl && " + strings.Join(commands, " ")}
+			commands = []string{"bash", "-c", "PIP_DISABLE_PIP_VERSION_CHECK=1 pip install -U --no-cache-dir nixl && " + strings.Join(commands, " ")}
 		}
 	}
 
