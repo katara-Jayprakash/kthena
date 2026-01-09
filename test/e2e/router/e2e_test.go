@@ -38,9 +38,8 @@ import (
 )
 
 var (
-	testCtx         *routercontext.RouterTestContext
-	testNamespace   string
-	kthenaNamespace string
+	testCtx       *routercontext.RouterTestContext
+	testNamespace string
 )
 
 // TestMain runs setup and cleanup for all tests in this package.
