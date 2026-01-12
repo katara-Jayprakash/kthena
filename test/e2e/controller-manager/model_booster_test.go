@@ -17,17 +17,12 @@ limitations under the License.
 package controller_manager
 
 import (
-	"context"
-	"fmt"
-	"os"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	clientset "github.com/volcano-sh/kthena/client-go/clientset/versioned"
 	workload "github.com/volcano-sh/kthena/pkg/apis/workload/v1alpha1"
-	"github.com/volcano-sh/kthena/test/e2e/framework"
 	"github.com/volcano-sh/kthena/test/e2e/utils"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -36,39 +31,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-const (
-	// TODO: separate kthena system components and e2e test namespace
-	testNamespace = "dev"
-)
-
-func TestMain(m *testing.M) {
-	config := framework.NewDefaultConfig()
-	// Controller manager tests need workload enabled
-	config.WorkloadEnabled = true
-
-	if err := framework.InstallKthena(config); err != nil {
-		fmt.Printf("Failed to install kthena: %v\n", err)
-		os.Exit(1)
-	}
-
-	// Run tests
-	code := m.Run()
-
-	if err := framework.UninstallKthena(config.Namespace); err != nil {
-		fmt.Printf("Failed to uninstall kthena: %v\n", err)
-	}
-
-	os.Exit(code)
-}
-
 // TestModelCR creates a ModelBooster CR, waits for it to become active, and tests chat functionality.
 func TestModelCR(t *testing.T) {
-	ctx := context.Background()
-	// Initialize Kubernetes clients
-	config, err := utils.GetKubeConfig()
-	require.NoError(t, err, "Failed to get kubeconfig")
-	kthenaClient, err := clientset.NewForConfig(config)
-	require.NoError(t, err, "Failed to create kthena client")
+	ctx, kthenaClient := setupControllerManagerE2ETest(t)
+
 	// Create a Model CR in the test namespace
 	model := createTestModel()
 	createdModel, err := kthenaClient.WorkloadV1alpha1().ModelBoosters(testNamespace).Create(ctx, model, metav1.CreateOptions{})
@@ -90,7 +56,14 @@ func TestModelCR(t *testing.T) {
 		utils.NewChatMessage("user", "Where is the capital of China?"),
 	}
 	utils.CheckChatCompletions(t, "test-model", messages)
-	// todo: test update modelBooster, delete modelBooster
+	// TODO(user): Add tests for updating and deleting ModelBooster
+}
+
+func createValidModelBoosterForWebhookTest() *workload.ModelBooster {
+	model := createTestModel()
+	model.Name = "webhook-test-model"
+	model.Spec.Name = "webhook-test-model"
+	return model
 }
 
 func createTestModel() *workload.ModelBooster {
@@ -121,24 +94,70 @@ func createTestModel() *workload.ModelBooster {
 				MaxReplicas: 1,
 				Workers: []workload.ModelWorker{
 					{
-						Type:     workload.ModelWorkerTypeServer,
-						Image:    "ghcr.io/huntersman/vllm-cpu-env:latest",
-						Replicas: 1,
-						Pods:     1,
-						Config:   *config,
-						Resources: corev1.ResourceRequirements{
-							Requests: corev1.ResourceList{
-								corev1.ResourceCPU:    resource.MustParse("2"),
-								corev1.ResourceMemory: resource.MustParse("4Gi"),
-							},
-							Limits: corev1.ResourceList{
-								corev1.ResourceCPU:    resource.MustParse("4"),
-								corev1.ResourceMemory: resource.MustParse("16Gi"),
-							},
-						},
+						Type:      workload.ModelWorkerTypeServer,
+						Image:     "ghcr.io/huntersman/vllm-cpu-env:latest",
+						Replicas:  1,
+						Pods:      1,
+						Config:    *config,
+						Resources: corev1ResourceRequirements(),
 					},
 				},
 			},
+		},
+	}
+}
+
+func createInvalidModel() *workload.ModelBooster {
+	// Create a simple config as JSON
+	config := &apiextensionsv1.JSON{}
+	configRaw := `{
+		"served-model-name": "invalid-model",
+		"max-model-len": 32768,
+		"max-num-batched-tokens": 65536,
+		"block-size": 128,
+		"enable-prefix-caching": ""
+	}`
+	config.Raw = []byte(configRaw)
+
+	return &workload.ModelBooster{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "invalid-model",
+			Namespace: testNamespace,
+		},
+		Spec: workload.ModelBoosterSpec{
+			Name: "invalid-model",
+			Backend: workload.ModelBackend{
+				Name:        "backend1",
+				Type:        workload.ModelBackendTypeVLLM,
+				ModelURI:    "hf://Qwen/Qwen2.5-0.5B-Instruct",
+				CacheURI:    "hostpath:///tmp/cache",
+				MinReplicas: 5, // invalid: greater than maxReplicas
+				MaxReplicas: 1,
+				Workers: []workload.ModelWorker{
+					{
+						Type:      workload.ModelWorkerTypeServer,
+						Image:     "ghcr.io/huntersman/vllm-cpu-env:latest",
+						Replicas:  1,
+						Pods:      1,
+						Config:    *config,
+						Resources: corev1ResourceRequirements(),
+					},
+				},
+			},
+		},
+	}
+}
+
+// corev1ResourceRequirements is a helper to avoid duplication and keep imports clean
+func corev1ResourceRequirements() corev1.ResourceRequirements {
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("2"),
+			corev1.ResourceMemory: resource.MustParse("4Gi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("4"),
+			corev1.ResourceMemory: resource.MustParse("16Gi"),
 		},
 	}
 }

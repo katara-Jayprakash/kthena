@@ -32,8 +32,8 @@ import (
 	"github.com/spf13/pflag"
 	clientset "github.com/volcano-sh/kthena/client-go/clientset/versioned"
 	"github.com/volcano-sh/kthena/pkg/controller"
-	"github.com/volcano-sh/kthena/pkg/model-booster-webhook/handlers"
-	"github.com/volcano-sh/kthena/pkg/model-serving-controller/webhook"
+	modelboosterwebhook "github.com/volcano-sh/kthena/pkg/model-booster-controller/webhook"
+	modelservingwebhook "github.com/volcano-sh/kthena/pkg/model-serving-controller/webhook"
 	webhookcert "github.com/volcano-sh/kthena/pkg/webhook/cert"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -165,14 +165,14 @@ func setupWebhook(ctx context.Context, wc webhookConfig) error {
 
 	mux := http.NewServeMux()
 
-	modelServingValidator := webhook.NewModelServingValidator()
+	modelServingValidator := modelservingwebhook.NewModelServingValidator()
 	mux.HandleFunc("/validate-workload-ai-v1alpha1-modelServing", modelServingValidator.Handle)
 
-	modelValidator := handlers.NewModelValidator()
-	modelMutator := handlers.NewModelMutator()
-	autoscalingPolicyValidator := handlers.NewAutoscalingPolicyValidator()
-	autoscalingPolicyMutator := handlers.NewAutoscalingPolicyMutator()
-	autoscalingBindingValidator := handlers.NewAutoscalingBindingValidator(kthenaClient)
+	modelValidator := modelboosterwebhook.NewModelValidator()
+	modelMutator := modelboosterwebhook.NewModelMutator()
+	autoscalingPolicyValidator := modelboosterwebhook.NewAutoscalingPolicyValidator()
+	autoscalingPolicyMutator := modelboosterwebhook.NewAutoscalingPolicyMutator()
+	autoscalingBindingValidator := modelboosterwebhook.NewAutoscalingBindingValidator(kthenaClient)
 	mux.HandleFunc("/validate/modelbooster", modelValidator.Handle)
 	mux.HandleFunc("/mutate/modelbooster", modelMutator.Handle)
 	mux.HandleFunc("/validate/autoscalingpolicy", autoscalingPolicyValidator.Handle)
