@@ -816,7 +816,7 @@ func TestModelRouteLoraShared(t *testing.T, testCtx *routercontext.RouterTestCon
 			utils.NewChatMessage("user", "Hello"),
 		}
 
-		resp := utils.CheckChatCompletions(t, "lora-NonExistent", messages)
+		resp := utils.SendChatRequestWithRetry(t, utils.DefaultRouterURL, "lora-NonExistent", messages, nil)
 
 		// Non-existent LoRA adapter should return 404
 		assert.Equal(t, 404, resp.StatusCode, "Expected HTTP 404 status code for non-existent LoRA adapter")
