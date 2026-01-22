@@ -470,14 +470,20 @@ func TestModelRouteWithRateLimitShared(t *testing.T, testCtx *routercontext.Rout
 
 	// Test 1: Verify input token rate limit enforcement (30 tokens/minute)
 	t.Run("VerifyInputTokenRateLimitEnforcement", func(t *testing.T) {
-		t.Log("Verifying input token rate limit")
+		t.Log("=== Starting Test 1: Verifying input token rate limit ===")
 
+		t.Log("Loading ModelRoute YAML...")
 		modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute]("examples/kthena-router/ModelRouteWithRateLimit.yaml")
 		modelRoute.Namespace = testNamespace
+		t.Logf("Loaded ModelRoute: %s, ModelName: %s, TargetModel: %s",
+			modelRoute.Name, modelRoute.Spec.ModelName, modelRoute.Spec.Rules[0].TargetModels[0].ModelServerName)
+
 		setupModelRouteWithGatewayAPI(modelRoute, useGatewayApi, kthenaNamespace)
 
+		t.Log("Creating ModelRoute...")
 		createdModelRoute, err := testCtx.KthenaClient.NetworkingV1alpha1().ModelRoutes(testNamespace).Create(ctx, modelRoute, metav1.CreateOptions{})
 		require.NoError(t, err, "Failed to create ModelRoute")
+		t.Logf("Successfully created ModelRoute: %s/%s", createdModelRoute.Namespace, createdModelRoute.Name)
 
 		t.Cleanup(func() {
 			cleanupCtx := context.Background()
