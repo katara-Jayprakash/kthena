@@ -492,13 +492,12 @@ func TestModelRouteWithRateLimitShared(t *testing.T, testCtx *routercontext.Rout
 			return err == nil && mr != nil
 		}, 2*time.Minute, 2*time.Second, "ModelRoute should be created")
 
-		// Wait for router to reconcile (consumes ~10 tokens from our quota)
+		// Wait for router to reconcile ModelRoute and discover backend services
 		utils.WaitForRouterReady(t, createdModelRoute.Spec.ModelName, standardMessage)
-		t.Logf("Router ready (consumed ~%d/%d tokens for readiness check)", tokensPerRequest, inputTokenLimit)
 
-		// Calculate expected successful requests, accounting for readiness check
-		remainingQuota := inputTokenLimit - tokensPerRequest            // 30 - 10 = 20
-		expectedSuccessfulRequests := remainingQuota / tokensPerRequest // 20 / 10 = 2
+		// Account for tokens consumed during readiness check
+		remainingQuota := inputTokenLimit - tokensPerRequest
+		expectedSuccessfulRequests := remainingQuota / tokensPerRequest
 		if expectedSuccessfulRequests == 0 {
 			t.Fatalf("Invalid test configuration: inputTokenLimit (%d) / tokensPerRequest (%d) = 0",
 				inputTokenLimit, tokensPerRequest)
