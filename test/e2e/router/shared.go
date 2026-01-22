@@ -470,7 +470,7 @@ func TestModelRouteWithRateLimitShared(t *testing.T, testCtx *routercontext.Rout
 
 	// Test 1: Verify input token rate limit enforcement (30 tokens/minute)
 	t.Run("VerifyInputTokenRateLimitEnforcement", func(t *testing.T) {
-		t.Log("Test 1: Verifying input token rate limit")
+		t.Log("Verifying input token rate limit")
 
 		modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute]("examples/kthena-router/ModelRouteWithRateLimit.yaml")
 		modelRoute.Namespace = testNamespace
@@ -491,7 +491,7 @@ func TestModelRouteWithRateLimitShared(t *testing.T, testCtx *routercontext.Rout
 			return err == nil && mr != nil
 		}, 2*time.Minute, 2*time.Second, "ModelRoute should be created")
 
-		// Calculate expected successful requests
+		// Calculate expected successful requests ~ 3
 		expectedSuccessfulRequests := inputTokenLimit / tokensPerRequest
 		if expectedSuccessfulRequests == 0 {
 			t.Fatalf("Invalid test configuration: inputTokenLimit (%d) / tokensPerRequest (%d) = 0",
