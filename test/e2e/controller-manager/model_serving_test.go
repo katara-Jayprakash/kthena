@@ -17,6 +17,7 @@ limitations under the License.
 package controller_manager
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -104,6 +105,15 @@ func TestModelServingPodRecovery(t *testing.T) {
 		Create(ctx, modelServing, metav1.CreateOptions{})
 	require.NoError(t, err, "Failed to create ModelServing")
 
+	// Register cleanup for ModelServing
+	t.Cleanup(func() {
+		cleanupCtx := context.Background()
+		t.Logf("Cleaning up ModelServing: %s/%s", modelServing.Namespace, modelServing.Name)
+		if err := kthenaClient.WorkloadV1alpha1().ModelServings(testNamespace).Delete(cleanupCtx, modelServing.Name, metav1.DeleteOptions{}); err != nil {
+			t.Logf("Warning: Failed to delete ModelServing %s/%s: %v", modelServing.Namespace, modelServing.Name, err)
+		}
+	})
+
 	// Ensure the created ModelServing is cleaned up after the test completes
 	t.Cleanup(func() {
 		err := kthenaClient.WorkloadV1alpha1().
@@ -123,14 +133,10 @@ func TestModelServingPodRecovery(t *testing.T) {
 	})
 	require.NoError(t, err, "Failed to list pods with label selector")
 
-	// Find the original pod by label value
+	// Set original pod to first item since list already uses label selector
 	var originalPod *corev1.Pod
-	for i := range podList.Items {
-		p := &podList.Items[i]
-		if v, ok := p.Labels["kthena.volcano.sh/model-serving-name"]; ok && v == modelServing.Name {
-			originalPod = p
-			break
-		}
+	if len(podList.Items) > 0 {
+		originalPod = &podList.Items[0]
 	}
 
 	// If no pod with the label is found, skip the test
@@ -193,6 +199,15 @@ func TestModelServingServiceRecovery(t *testing.T) {
 		ModelServings(testNamespace).
 		Create(ctx, modelServing, metav1.CreateOptions{})
 	require.NoError(t, err, "Failed to create ModelServing")
+
+	// Register cleanup for ModelServing
+	t.Cleanup(func() {
+		cleanupCtx := context.Background()
+		t.Logf("Cleaning up ModelServing: %s/%s", modelServing.Namespace, modelServing.Name)
+		if err := kthenaClient.WorkloadV1alpha1().ModelServings(testNamespace).Delete(cleanupCtx, modelServing.Name, metav1.DeleteOptions{}); err != nil {
+			t.Logf("Warning: Failed to delete ModelServing %s/%s: %v", modelServing.Namespace, modelServing.Name, err)
+		}
+	})
 
 	// Ensure the created ModelServing is cleaned up after the test, even on failure.
 	t.Cleanup(func() {
