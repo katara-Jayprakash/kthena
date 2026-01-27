@@ -75,7 +75,6 @@ generate: gen-crd ## Generate code containing DeepCopy, DeepCopyInto, and DeepCo
 	./hack/update-codegen.sh
 	$(MAKE) gen-docs
 	$(MAKE) gen-copyright
-	./hack/update-crd.sh
 
 .PHONY: gen-check
 gen-check: generate
