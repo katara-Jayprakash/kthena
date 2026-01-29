@@ -477,6 +477,10 @@ func TestModelRouteWithRateLimitShared(t *testing.T, testCtx *routercontext.Rout
 
 		modelRoute := utils.LoadYAMLFromFile[networkingv1alpha1.ModelRoute]("examples/kthena-router/ModelRouteWithRateLimit.yaml")
 		modelRoute.Namespace = testNamespace
+		// Only test input rate limit; remove output limit to avoid 429 "output token rate limit exceeded"
+		if modelRoute.Spec.RateLimit != nil {
+			modelRoute.Spec.RateLimit.OutputTokensPerUnit = nil
+		}
 		setupModelRouteWithGatewayAPI(modelRoute, useGatewayApi, kthenaNamespace)
 
 		createdModelRoute, err := testCtx.KthenaClient.NetworkingV1alpha1().ModelRoutes(testNamespace).Create(ctx, modelRoute, metav1.CreateOptions{})
