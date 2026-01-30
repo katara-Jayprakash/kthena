@@ -1072,9 +1072,13 @@ func (c *ModelServingController) handleReadyPod(ms *workloadv1alpha1.ModelServin
 		Namespace: ms.Namespace,
 		Name:      ms.Name,
 <<<<<<< HEAD
+<<<<<<< HEAD
 	}, servingGroupName, newPod.Name, utils.ObjectRevision(newPod), utils.GetRoleName(newPod), utils.GetRoleID(newPod))
 =======
 	}, servingGroupName, newPod.Name, utils.PodRevision(newPod), roleName, roleID)
+=======
+	}, servingGroupName, newPod.Name, utils.ObjectRevision(newPod), roleName, roleID)
+>>>>>>> 5babbc0 (fix: address maintainer feedback)
 
 	// Check and update role status to Running when all pods in the role are ready
 	roleReady, err := c.checkRoleReady(ms, servingGroupName, roleName, roleID)
@@ -1091,7 +1095,10 @@ func (c *ModelServingController) handleReadyPod(ms *workloadv1alpha1.ModelServin
 		}
 	}
 
+<<<<<<< HEAD
 >>>>>>> 109b8e8 (Fix role status never transitioning to Running)
+=======
+>>>>>>> 5babbc0 (fix: address maintainer feedback)
 	ready, err := c.checkServingGroupReady(ms, servingGroupName)
 	if err != nil {
 		return fmt.Errorf("failed to check ServingGroup status, err: %v", err)
