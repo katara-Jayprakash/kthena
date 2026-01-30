@@ -1134,6 +1134,7 @@ func TestHandlePodGroupCRDChange(t *testing.T) {
 		// Create a manager with a buffered channel to capture the change
 		manager := &Manager{
 			PodGroupCRDChangeCh: make(chan bool, 1),
+			volcanoClient:      volcanofake.NewSimpleClientset(),
 			store:               store,
 		}
 
@@ -1193,6 +1194,7 @@ func TestHandlePodGroupCRDChange(t *testing.T) {
 		// Create a manager with a buffered channel to capture the change
 		manager := &Manager{
 			PodGroupCRDChangeCh: make(chan bool, 1),
+			volcanoClient:      volcanofake.NewSimpleClientset(),
 			store:               store,
 		}
 
@@ -1228,6 +1230,7 @@ func TestHandlePodGroupCRDChange(t *testing.T) {
 		// Create a manager with an unbuffered channel (to detect if anything is sent)
 		manager := &Manager{
 			PodGroupCRDChangeCh: make(chan bool, 1),
+			volcanoClient:      volcanofake.NewSimpleClientset(),
 			store:               store,
 		}
 
@@ -1288,6 +1291,7 @@ func TestHandlePodGroupCRDChange(t *testing.T) {
 		// Create a manager with an unbuffered channel (to detect if anything is sent)
 		manager := &Manager{
 			PodGroupCRDChangeCh: make(chan bool, 1),
+			volcanoClient:      volcanofake.NewSimpleClientset(),
 			store:               store,
 		}
 

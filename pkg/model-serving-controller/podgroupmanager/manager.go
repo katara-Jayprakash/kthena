@@ -31,7 +31,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
@@ -231,11 +230,11 @@ func (m *Manager) CreateOrUpdatePodGroup(ctx context.Context, ms *workloadv1alph
 		return nil, 0
 	}
 
-	podgroupLister := m.GetPodGroupLister()
-	if podgroupLister == nil {
+	podGroupLister := m.GetPodGroupLister()
+	if podGroupLister == nil {
 		return fmt.Errorf("PodGroup informer is not initialized"), 1 * time.Second
 	}
-	podGroup, err := podgroupLister.PodGroups(ms.Namespace).Get(pgName)
+	podGroup, err := podGroupLister.PodGroups(ms.Namespace).Get(pgName)
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
 			return fmt.Errorf("failed to get PodGroup %s: %v", pgName, err), 0
@@ -243,23 +242,11 @@ func (m *Manager) CreateOrUpdatePodGroup(ctx context.Context, ms *workloadv1alph
 		return m.createPodGroup(ctx, ms, pgName), 0
 	}
 
-	if !isOwnedByModelServingWithUID(podGroup, ms.UID) {
+	if !utils.IsOwnedByModelServingWithUID(podGroup, ms.UID) {
 		return fmt.Errorf("PodGroup %s is not owned by ModelServing %s", pgName, ms.Name), 1 * time.Second
 	}
 
 	return m.updatePodGroupIfNeeded(ctx, podGroup, ms), 0
-}
-
-func isOwnedByModelServingWithUID(obj metav1.Object, uid types.UID) bool {
-	for _, ownerRef := range obj.GetOwnerReferences() {
-		if ownerRef.APIVersion == workloadv1alpha1.SchemeGroupVersion.String() &&
-			ownerRef.Kind == "ModelServing" &&
-			ownerRef.UID == uid {
-			return true
-		}
-	}
-	klog.Warningf("object %s/%s is not owned by ModelServing with UID %s", obj.GetNamespace(), obj.GetName(), uid)
-	return false
 }
 
 // shouldCreatePodGroup checks if gang scheduling or networkTopology scheduling is enabled for the ModelServing.
@@ -365,14 +352,20 @@ func (m *Manager) calculateRequirements(ms *workloadv1alpha1.ModelServing, podGr
 		}
 
 		// Check if PodGroup exists to determine if we're handling a deletion/recreation scenario
-		podGroupExists := true
-		if _, err := m.volcanoClient.SchedulingV1beta1().PodGroups(ms.Namespace).Get(context.TODO(), podGroupName, metav1.GetOptions{}); err != nil {
+		podGroupExists := false
+		podGroupLister := m.GetPodGroupLister()
+		if podGroupLister == nil {
+			klog.V(4).Infof("PodGroup lister is not initialized; treating PodGroup %s as missing", podGroupName)
+		} else if _, err := podGroupLister.PodGroups(ms.Namespace).Get(podGroupName); err != nil {
 			if apierrors.IsNotFound(err) {
 				podGroupExists = false
 				klog.V(4).Infof("PodGroup %s does not exist, will create it", podGroupName)
 			} else {
+				podGroupExists = true
 				klog.Errorf("Failed to check existence of PodGroup %s: %v", podGroupName, err)
 			}
+		} else {
+			podGroupExists = true
 		}
 
 		// During scaling operations, podGroup does not affect scaling policies.
@@ -595,6 +588,13 @@ func (m *Manager) handlePodGroupCRDChange(crd *apiextv1.CustomResourceDefinition
 		return
 	}
 
+	if m.volcanoClient == nil {
+		klog.Warning("PodGroup CRD detected but volcano client is not initialized; disabling PodGroup support")
+		m.hasPodGroupCRD.Store(false)
+		m.hasSubGroupPolicy.Store(false)
+		return
+	}
+
 	klog.Info("PodGroup CRD detected")
 	m.hasPodGroupCRD.Store(true)
 	if podGroupCRDHasSubGroup(crd) {
@@ -607,6 +607,7 @@ func (m *Manager) handlePodGroupCRDChange(crd *apiextv1.CustomResourceDefinition
 
 	if initErr := m.initPodGroupInformer(); initErr != nil {
 		klog.Errorf("failed to initialize PodGroup informer: %v", initErr)
+		m.stopPodGroupInformer()
 	}
 }
 

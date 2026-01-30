@@ -330,7 +330,7 @@ func (c *ModelServingController) updatePod(_, newObj interface{}) {
 func (c *ModelServingController) deletePod(obj interface{}) {
 	pod, ok := obj.(*corev1.Pod)
 	if !ok {
-		// If the object is not a Pod, it msght be a tombstone object.
+		// If the object is not a Pod, it might be a tombstone object.
 		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
 		if !ok {
 			klog.Error("failed to parse pod type when deletePod")
@@ -372,7 +372,7 @@ func (c *ModelServingController) deletePod(obj interface{}) {
 func (c *ModelServingController) deleteService(obj interface{}) {
 	svc, ok := obj.(*corev1.Service)
 	if !ok {
-		// If the object is not a Service, it msght be a tombstone object.
+		// If the object is not a Service, it might be a tombstone object.
 		tombstone, ok := obj.(cache.DeletedFinalStateUnknown)
 		if !ok {
 			klog.Error("failed to parse service type when deleteService")
@@ -558,6 +558,20 @@ func (c *ModelServingController) Run(ctx context.Context, workers int) {
 	}
 	<-ctx.Done()
 	klog.Info("shut down modelServing controller")
+}
+
+// resyncAllModelServings triggers a resync of all model servings
+// to createOrUpdate PodGroup if needed when PodGroup CRD becomes available.
+func (c *ModelServingController) resyncAllModelServings() {
+	modelServings, err := c.modelServingLister.List(labels.Everything())
+	if err != nil {
+		klog.Errorf("failed to list model servings for resync: %v", err)
+		return
+	}
+
+	for _, ms := range modelServings {
+		c.enqueueModelServing(ms)
+	}
 }
 
 func (c *ModelServingController) syncAll() {
@@ -863,7 +877,7 @@ func (c *ModelServingController) manageRoleReplicas(ctx context.Context, ms *wor
 			continue
 		}
 		for _, pod := range pods {
-			if !isOwnedByModelServingWithUID(pod, ms.UID) {
+			if !utils.IsOwnedByModelServingWithUID(pod, ms.UID) {
 				// If the pod is not owned by the ModelServing, we do not need to handle it.
 				klog.Infof("pod %s/%s maybe left from previous same named ModelServing %s/%s, reenqueue ModelServing for reconcile",
 					pod.Namespace, pod.Name, ms.Namespace, ms.Name)
@@ -1291,7 +1305,7 @@ func (c *ModelServingController) getModelServingByChildResource(resource metav1.
 
 // shouldSkipHandling checks if a pod should be skipped based on owner mismatch or revision mismatch
 func (c *ModelServingController) shouldSkipHandling(ms *workloadv1alpha1.ModelServing, servingGroupName string, obj metav1.Object) bool {
-	if !isOwnedByModelServingWithUID(obj, ms.UID) {
+	if !utils.IsOwnedByModelServingWithUID(obj, ms.UID) {
 		// If the pod is not owned by the ModelServing, we do not need to handle it.
 		klog.V(4).Infof("object %s/%s maybe left from previous same named ModelServing %s/%s, skip handling",
 			obj.GetNamespace(), obj.GetName(), ms.Namespace, ms.Name)
@@ -1299,7 +1313,7 @@ func (c *ModelServingController) shouldSkipHandling(ms *workloadv1alpha1.ModelSe
 	}
 
 	revision := utils.ObjectRevision(obj)
-	// Headless Service and PodGroup do not have revision label.
+	// Headless Service and PodGroup do not have revision labels.
 	// And Rolling updates do not affect Headless Services or podGroups.
 	if revision == "" {
 		_, ok := obj.(*corev1.Pod)
@@ -1341,18 +1355,6 @@ func isOwnedByModelServing(metaObj metav1.Object) bool {
 			return true
 		}
 	}
-	return false
-}
-
-func isOwnedByModelServingWithUID(obj metav1.Object, uid types.UID) bool {
-	for _, ownerRef := range obj.GetOwnerReferences() {
-		if ownerRef.APIVersion == workloadv1alpha1.SchemeGroupVersion.String() &&
-			ownerRef.Kind == "ModelServing" &&
-			ownerRef.UID == uid {
-			return true
-		}
-	}
-	klog.Warningf("object %s/%s is not owned by ModelServing with UID %s", obj.GetNamespace(), obj.GetName(), uid)
 	return false
 }
 
@@ -1485,11 +1487,18 @@ func (c *ModelServingController) getServicesByIndex(indexName, indexValue string
 
 // TODO: Refactor these three functions to a single function.
 func (c *ModelServingController) getPodGroupsByIndex(indexName, indexValue string) ([]*schedulingv1beta1.PodGroup, error) {
+	if c.podGroupManager == nil || !c.podGroupManager.HasPodGroupCRD() {
+		return nil, nil
+	}
+
 	podGroupInformer := c.podGroupManager.GetPodGroupInformer()
 	if podGroupInformer == nil {
 		return nil, fmt.Errorf("podGroup informer is not initialized")
 	}
 	indexer := podGroupInformer.GetIndexer()
+	if indexer == nil {
+		return nil, fmt.Errorf("podGroup informer indexer is not initialized")
+	}
 	if _, exists := indexer.GetIndexers()[indexName]; !exists {
 		return nil, fmt.Errorf("podGroup indexer %s not found", indexName)
 	}
@@ -1803,7 +1812,7 @@ func (c *ModelServingController) manageHeadlessService(ctx context.Context, ms *
 					// If the service is not owned by the ModelServing,
 					// means this svc is created by the modelserving with the same name has already been deleted.
 					// Should re-enqueue after enqueueTimeInterval(1 second).
-					if !isOwnedByModelServingWithUID(svc, ms.UID) {
+					if !utils.IsOwnedByModelServingWithUID(svc, ms.UID) {
 						c.enqueueModelServingAfter(ms, enqueueAfter)
 						return nil
 					}
@@ -1902,7 +1911,7 @@ func (c *ModelServingController) createPod(
 	if err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			existing, _ := c.podsLister.Pods(ms.Namespace).Get(pod.Name)
-			if existing != nil && !isOwnedByModelServingWithUID(existing, ms.UID) {
+			if existing != nil && !utils.IsOwnedByModelServingWithUID(existing, ms.UID) {
 				// If the existing pod is not owned by the current ModelServing, enqueue it for reconciliation
 				klog.V(4).Infof("%s pod %s is outdated, enqueue to reconcile", roleKind, pod.Name)
 				c.enqueueModelServingAfter(ms, enqueueAfter)

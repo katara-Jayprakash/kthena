@@ -270,6 +270,19 @@ func GetModelServingAndGroupByLabel(podLabels map[string]string) (string, string
 	return modelServingName, servingGroupName, true
 }
 
+// IsOwnedByModelServingWithUID returns true when the object is owned by the ModelServing with the provided UID.
+func IsOwnedByModelServingWithUID(obj metav1.Object, uid types.UID) bool {
+	for _, ownerRef := range obj.GetOwnerReferences() {
+		if ownerRef.APIVersion == workloadv1alpha1.SchemeGroupVersion.String() &&
+			ownerRef.Kind == workloadv1alpha1.ModelServingKind.Kind &&
+			ownerRef.UID == uid {
+			return true
+		}
+	}
+	klog.Warningf("object %s/%s is not owned by ModelServing with UID %s", obj.GetNamespace(), obj.GetName(), uid)
+	return false
+}
+
 // IsPodRunningAndReady returns true if pod is in the PodRunning Phase, if it has a condition of PodReady.
 func IsPodRunningAndReady(pod *corev1.Pod) bool {
 	return pod.Status.Phase == corev1.PodRunning && isPodReady(pod)
