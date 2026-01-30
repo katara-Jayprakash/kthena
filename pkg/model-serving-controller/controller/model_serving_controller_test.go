@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -3968,6 +3969,187 @@ func TestCalculateRoleScore(t *testing.T) {
 	}
 }
 
+// TestScaleDownRolesRunningStatusDeprioritized tests that roles with RoleRunning status
+// are deprioritized (deleted last) during scale-down operations compared to roles
+// in RoleCreating or RoleNotFound states.
+func TestScaleDownRolesRunningStatusDeprioritized(t *testing.T) {
+	tests := []struct {
+		name                   string
+		existingIndices        []int
+		roleStatuses           map[int]datastore.RoleStatus
+		expectedCount          int
+		expectedRemainingNames []string
+		description            string
+	}{
+		{
+			name:            "running_roles_kept_over_creating_roles",
+			existingIndices: []int{0, 1, 2},
+			roleStatuses: map[int]datastore.RoleStatus{
+				0: datastore.RoleRunning,
+				1: datastore.RoleCreating, // Not ready - should be deleted first
+				2: datastore.RoleRunning,
+			},
+			expectedCount:          2,
+			expectedRemainingNames: []string{"prefill-0", "prefill-2"},
+			description:            "RoleCreating (index 1) should be deleted before RoleRunning roles",
+		},
+		{
+			name:            "running_roles_kept_over_notfound_roles",
+			existingIndices: []int{0, 1, 2},
+			roleStatuses: map[int]datastore.RoleStatus{
+				0: datastore.RoleRunning,
+				1: datastore.RoleNotFound, // Not ready - should be deleted first
+				2: datastore.RoleRunning,
+			},
+			expectedCount:          2,
+			expectedRemainingNames: []string{"prefill-0", "prefill-2"},
+			description:            "RoleNotFound (index 1) should be deleted before RoleRunning roles",
+		},
+		{
+			name:            "multiple_running_roles_higher_index_deleted_first",
+			existingIndices: []int{0, 1, 2, 3},
+			roleStatuses: map[int]datastore.RoleStatus{
+				0: datastore.RoleRunning,
+				1: datastore.RoleRunning,
+				2: datastore.RoleRunning,
+				3: datastore.RoleRunning,
+			},
+			expectedCount:          2,
+			expectedRemainingNames: []string{"prefill-0", "prefill-1"},
+			description:            "Among all RoleRunning roles, higher indices (3, 2) should be deleted first",
+		},
+		{
+			name:            "mixed_statuses_not_ready_deleted_first",
+			existingIndices: []int{0, 1, 2, 3},
+			roleStatuses: map[int]datastore.RoleStatus{
+				0: datastore.RoleCreating, // Not ready - delete first
+				1: datastore.RoleRunning,
+				2: datastore.RoleNotFound, // Not ready - delete first
+				3: datastore.RoleRunning,
+			},
+			expectedCount:          2,
+			expectedRemainingNames: []string{"prefill-1", "prefill-3"},
+			description:            "Both not-ready roles (0, 2) should be deleted, keeping both Running roles (1, 3)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setup fake clients
+			kubeClient := kubefake.NewSimpleClientset()
+			kthenaClient := kthenafake.NewSimpleClientset()
+			volcanoClient := volcanofake.NewSimpleClientset()
+			apiextClient := apiextfake.NewSimpleClientset(testhelper.CreatePodGroupCRD())
+
+			controller, err := NewModelServingController(kubeClient, kthenaClient, volcanoClient, apiextClient)
+			assert.NoError(t, err)
+
+			// Create ModelServing
+			ms := &workloadv1alpha1.ModelServing{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-ms",
+					Namespace: "default",
+				},
+				Spec: workloadv1alpha1.ModelServingSpec{
+					Replicas: ptr.To[int32](1),
+					Template: workloadv1alpha1.ServingGroup{
+						Roles: []workloadv1alpha1.Role{
+							{
+								Name:     "prefill",
+								Replicas: ptr.To[int32](int32(tt.expectedCount)),
+							},
+						},
+					},
+				},
+			}
+
+			groupName := "test-ms-0"
+			nsn := utils.GetNamespaceName(ms)
+
+			// Add serving group
+			controller.store.AddServingGroup(nsn, 0, "test-revision")
+
+			// Create roles with specified statuses
+			var roleList []datastore.Role
+			for _, idx := range tt.existingIndices {
+				roleID := fmt.Sprintf("prefill-%d", idx)
+				controller.store.AddRole(nsn, groupName, "prefill", roleID, "test-revision")
+				controller.store.UpdateRoleStatus(nsn, groupName, "prefill", roleID, tt.roleStatuses[idx])
+				roleList = append(roleList, datastore.Role{
+					Name:     roleID, // In datastore.Role, Name holds the roleID
+					Revision: "test-revision",
+					Status:   tt.roleStatuses[idx],
+				})
+			}
+
+			// Create mock pods for each role
+			podIndexer := controller.podsInformer.GetIndexer()
+			for _, idx := range tt.existingIndices {
+				roleID := fmt.Sprintf("prefill-%d", idx)
+				pod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "default",
+						Name:      fmt.Sprintf("pod-%s", roleID),
+						Labels: map[string]string{
+							workloadv1alpha1.ModelServingNameLabelKey: ms.Name,
+							workloadv1alpha1.GroupNameLabelKey:        groupName,
+							workloadv1alpha1.RoleLabelKey:             "prefill",
+							workloadv1alpha1.RoleIDKey:                roleID,
+							workloadv1alpha1.EntryLabelKey:            utils.Entry,
+						},
+						Annotations: map[string]string{
+							PodDeletionCostAnnotation: "0",
+						},
+					},
+				}
+				err := podIndexer.Add(pod)
+				assert.NoError(t, err)
+			}
+
+			// Track which roles are deleted (targeted for deletion)
+			var deletedRoleIDs []string
+			patch := gomonkey.NewPatches()
+			patch.ApplyMethod(reflect.TypeOf(controller), "DeleteRole", func(_ *ModelServingController, ctx context.Context, ms *workloadv1alpha1.ModelServing, groupName, roleName, roleID string) {
+				deletedRoleIDs = append(deletedRoleIDs, roleID)
+			})
+			defer patch.Reset()
+
+			// Target role (using first role's spec)
+			targetRole := workloadv1alpha1.Role{
+				Name:     "prefill",
+				Replicas: ptr.To[int32](int32(tt.expectedCount)),
+			}
+
+			// Run scaleDownRoles
+			controller.scaleDownRoles(context.Background(), ms, groupName, targetRole, roleList, tt.expectedCount)
+
+			// Calculate expected deleted roles (all roles except expectedRemainingNames)
+			allRoleIDs := make(map[string]bool)
+			for _, idx := range tt.existingIndices {
+				allRoleIDs[fmt.Sprintf("prefill-%d", idx)] = true
+			}
+			for _, remaining := range tt.expectedRemainingNames {
+				delete(allRoleIDs, remaining)
+			}
+			var expectedDeletedRoleIDs []string
+			for id := range allRoleIDs {
+				expectedDeletedRoleIDs = append(expectedDeletedRoleIDs, id)
+			}
+
+			// Verify correct number of deletions
+			numToDelete := len(tt.existingIndices) - tt.expectedCount
+			assert.Equal(t, numToDelete, len(deletedRoleIDs),
+				"Expected %d deletions, got %d", numToDelete, len(deletedRoleIDs))
+
+			// Verify the correct roles were targeted for deletion
+			sort.Strings(deletedRoleIDs)
+			sort.Strings(expectedDeletedRoleIDs)
+			assert.Equal(t, expectedDeletedRoleIDs, deletedRoleIDs,
+				"%s: Expected deleted roles %v, got %v", tt.description, expectedDeletedRoleIDs, deletedRoleIDs)
+		})
+	}
+}
+
 // TestCalculateServingGroupScore tests the priority-based scoring for serving group scale-down
 func TestCalculateServingGroupScore(t *testing.T) {
 	kubeClient := kubefake.NewSimpleClientset()
@@ -5126,7 +5308,6 @@ func TestUpdateModelServingWithNilGangPolicy(t *testing.T) {
 	}
 }
 
-<<<<<<< HEAD
 func TestDeleteRoleRollbackOnFailure(t *testing.T) {
 	tests := []struct {
 		name                 string
@@ -5164,7 +5345,7 @@ func TestDeleteRoleRollbackOnFailure(t *testing.T) {
 			expectEnqueueCalled:  false,
 			description:          "are deletions succeed, no rollback needed",
 		},
-		{
+			{
 			name:                 "pod_api_error_no_rollback",
 			initialRoleStatus:    datastore.RoleNotFound,
 			podDeletionError:     apierrors.NewInternalError(fmt.Errorf("internal error")),
@@ -5172,7 +5353,124 @@ func TestDeleteRoleRollbackOnFailure(t *testing.T) {
 			expectedFinalStatus:  datastore.RoleNotFound,
 			expectEnqueueCalled:  true,
 			description:          "pod API error, should re-enqueue",
-=======
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := kubefake.NewSimpleClientset()
+			kthenaClient := kthenafake.NewSimpleClientset()
+			volcanoClient := volcanofake.NewSimpleClientset()
+			apiextfake := apiextfake.NewSimpleClientset(testhelper.CreatePodGroupCRD())
+
+			// Create informer factories
+			kubeInformerFactory := informers.NewSharedInformerFactory(client, 0)
+			kthenaInformerFactory := informersv1alpha1.NewSharedInformerFactory(kthenaClient, 0)
+
+			// Create controller
+			controller, err := NewModelServingController(client, kthenaClient, volcanoClient, apiextfake)
+			assert.NoError(t, err)
+
+			stop := make(chan struct{})
+			defer close(stop)
+
+			go controller.Run(context.Background(), 1)
+
+			// Start informers
+			kthenaInformerFactory.Start(stop)
+			kubeInformerFactory.Start(stop)
+
+			// Wait for cache sync
+			cache.WaitForCacheSync(stop,
+				controller.modelServingsInformer.HasSynced,
+				controller.podsInformer.HasSynced,
+				controller.servicesInformer.HasSynced,
+			)
+
+			if tt.podDeletionError != nil {
+				client.PrependReactor("delete-collection", "pods", func(action kubetesting.Action) (handled bool, ret runtime.Object, err error) {
+					return true, nil, tt.podDeletionError
+				})
+			}
+
+			if tt.serviceDeletionError != nil {
+				client.PrependReactor("delete", "services", func(action kubetesting.Action) (handled bool, ret runtime.Object, err error) {
+					return true, nil, tt.serviceDeletionError
+				})
+			}
+
+			ms := &workloadv1alpha1.ModelServing{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-model-serving",
+					Namespace: "default",
+				},
+			}
+
+			groupName := "test-group"
+			roleName := "test-role"
+			roleID := "test-role-id"
+
+			nsn := utils.GetNamespaceName(ms)
+			controller.store.AddRole(nsn, groupName, roleName, roleID, "test-revision")
+			controller.store.UpdateRoleStatus(nsn, groupName, roleName, roleID, tt.initialRoleStatus)
+
+			initialStatus := controller.store.GetRoleStatus(nsn, groupName, roleName, roleID)
+			assert.Equal(t, tt.initialRoleStatus, initialStatus)
+
+			pod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-pod",
+					Namespace: "default",
+					Labels: map[string]string{
+						workloadv1alpha1.GroupNameLabelKey: groupName,
+						workloadv1alpha1.RoleLabelKey:      roleName,
+						workloadv1alpha1.RoleIDKey:         roleID,
+					},
+				},
+			}
+
+			service := &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-service",
+					Namespace: "default",
+					Labels: map[string]string{
+						workloadv1alpha1.GroupNameLabelKey: groupName,
+						workloadv1alpha1.RoleLabelKey:      roleName,
+						workloadv1alpha1.RoleIDKey:         roleID,
+					},
+				},
+			}
+
+			_, err = client.CoreV1().Pods("default").Create(context.TODO(), pod, metav1.CreateOptions{})
+			assert.NoError(t, err)
+
+			_, err = client.CoreV1().Services("default").Create(context.TODO(), service, metav1.CreateOptions{})
+			assert.NoError(t, err)
+			err = controller.servicesInformer.GetIndexer().Add(service)
+			assert.NoError(t, err)
+
+			queue := []string{}
+			patch := gomonkey.NewPatches()
+			patch.ApplyPrivateMethod(reflect.TypeOf(&ModelServingController{}), "enqueueModelServing", func(ms *workloadv1alpha1.ModelServing, duration time.Duration) {
+				queue = append(queue, ms.Name)
+			})
+			defer patch.Reset()
+
+			controller.DeleteRole(context.Background(), ms, groupName, roleName, roleID)
+
+			finalStatus := controller.store.GetRoleStatus(nsn, groupName, roleName, roleID)
+			assert.Equal(t, tt.expectedFinalStatus, finalStatus)
+
+			queueLen := len(queue)
+			if tt.expectEnqueueCalled {
+				assert.True(t, queueLen > 0, "should enqueue")
+			} else {
+				assert.Equal(t, 0, queueLen, "should not enqueue")
+			}
+		})
+	}
+}
+
 // TestHandleReadyPodRoleStatusUpdate tests that handleReadyPod correctly updates
 // role status to Running when all pods in the role are ready.
 // This tests the fix for the bug where role status was never set to RoleRunning,
@@ -5273,81 +5571,10 @@ func TestHandleReadyPodRoleStatusUpdate(t *testing.T) {
 			newPodWorkerID:     2,
 			initialRoleStatus:  datastore.RoleCreating,
 			expectedRoleStatus: datastore.RoleCreating,
->>>>>>> b95c2df (Fix role status never transitioning to Running)
 		},
 	}
 
 	for _, tt := range tests {
-<<<<<<< HEAD
-		t.Run(tt.name, func(t *testing.T) {
-			client := kubefake.NewSimpleClientset()
-			kthenaClient := kthenafake.NewSimpleClientset()
-			volcanoClient := volcanofake.NewSimpleClientset()
-			apiextfake := apiextfake.NewSimpleClientset(testhelper.CreatePodGroupCRD())
-
-			// Create informer factories
-			kubeInformerFactory := informers.NewSharedInformerFactory(client, 0)
-			kthenaInformerFactory := informersv1alpha1.NewSharedInformerFactory(kthenaClient, 0)
-
-			// Create controller
-			controller, err := NewModelServingController(client, kthenaClient, volcanoClient, apiextfake)
-			assert.NoError(t, err)
-
-			stop := make(chan struct{})
-			defer close(stop)
-
-			go controller.Run(context.Background(), 1)
-
-			// Start informers
-			kthenaInformerFactory.Start(stop)
-			kubeInformerFactory.Start(stop)
-
-			// Wait for cache sync
-			cache.WaitForCacheSync(stop,
-				controller.modelServingsInformer.HasSynced,
-				controller.podsInformer.HasSynced,
-				controller.servicesInformer.HasSynced,
-			)
-
-			if tt.podDeletionError != nil {
-				client.PrependReactor("delete-collection", "pods", func(action kubetesting.Action) (handled bool, ret runtime.Object, err error) {
-					return true, nil, tt.podDeletionError
-				})
-			}
-
-			if tt.serviceDeletionError != nil {
-				client.PrependReactor("delete", "services", func(action kubetesting.Action) (handled bool, ret runtime.Object, err error) {
-					return true, nil, tt.serviceDeletionError
-				})
-			}
-
-			ms := &workloadv1alpha1.ModelServing{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-model-serving",
-					Namespace: "default",
-				},
-			}
-
-			groupName := "test-group"
-			roleName := "test-role"
-			roleID := "test-role-id"
-
-			nsn := utils.GetNamespaceName(ms)
-			controller.store.AddRole(nsn, groupName, roleName, roleID, "test-revision")
-			controller.store.UpdateRoleStatus(nsn, groupName, roleName, roleID, tt.initialRoleStatus)
-
-			initialStatus := controller.store.GetRoleStatus(nsn, groupName, roleName, roleID)
-			assert.Equal(t, tt.initialRoleStatus, initialStatus)
-
-			pod := &corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-pod",
-					Namespace: "default",
-					Labels: map[string]string{
-						workloadv1alpha1.GroupNameLabelKey: groupName,
-						workloadv1alpha1.RoleLabelKey:      roleName,
-						workloadv1alpha1.RoleIDKey:         roleID,
-=======
 		t.Run(tt.description, func(t *testing.T) {
 			// Setup fake clients
 			kubeClient := kubefake.NewSimpleClientset()
@@ -5394,50 +5621,141 @@ func TestHandleReadyPodRoleStatusUpdate(t *testing.T) {
 								},
 							},
 						},
->>>>>>> b95c2df (Fix role status never transitioning to Running)
 					},
 				},
 			}
 
-<<<<<<< HEAD
-			service := &corev1.Service{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-service",
-					Namespace: "default",
-					Labels: map[string]string{
-						workloadv1alpha1.GroupNameLabelKey: groupName,
-						workloadv1alpha1.RoleLabelKey:      roleName,
-						workloadv1alpha1.RoleIDKey:         roleID,
-					},
-				},
+			// Create controller with workqueue
+			controller := &ModelServingController{
+				kubeClientSet:    kubeClient,
+				podsInformer:     podInformer.Informer(),
+				podsLister:       podInformer.Lister(),
+				servicesInformer: serviceInformer.Informer(),
+				servicesLister:   serviceInformer.Lister(),
+				store:            store,
+				workqueue:        workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
 			}
 
-			_, err = client.CoreV1().Pods("default").Create(context.TODO(), pod, metav1.CreateOptions{})
-			assert.NoError(t, err)
+			// Start informers
+			stop := make(chan struct{})
+			defer close(stop)
+			kubeInformerFactory.Start(stop)
+			kubeInformerFactory.WaitForCacheSync(stop)
 
-			_, err = client.CoreV1().Services("default").Create(context.TODO(), service, metav1.CreateOptions{})
-			assert.NoError(t, err)
-			err = controller.servicesInformer.GetIndexer().Add(service)
-			assert.NoError(t, err)
+			podIndexer := podInformer.Informer().GetIndexer()
 
-			queue := []string{}
-			patch := gomonkey.NewPatches()
-			patch.ApplyPrivateMethod(reflect.TypeOf(&ModelServingController{}), "enqueueModelServing", func(ms *workloadv1alpha1.ModelServing, duration time.Duration) {
-				queue = append(queue, ms.Name)
-			})
-			defer patch.Reset()
+			// Add existing pods to indexer
+			for _, existingPod := range tt.existingPods {
+				pod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: ns,
+						Name:      existingPod.name,
+						Labels: map[string]string{
+							workloadv1alpha1.ModelServingNameLabelKey: msName,
+							workloadv1alpha1.GroupNameLabelKey:        groupName,
+							workloadv1alpha1.RoleLabelKey:             roleName,
+							workloadv1alpha1.RoleIDKey:                roleID,
+							workloadv1alpha1.RevisionLabelKey:         revision,
+						},
+						OwnerReferences: []metav1.OwnerReference{
+							{
+								APIVersion: workloadv1alpha1.GroupVersion.String(),
+								Kind:       "ModelServing",
+								Name:       msName,
+								UID:        ms.UID,
+							},
+						},
+					},
+					Status: corev1.PodStatus{
+						Phase: corev1.PodRunning,
+					},
+				}
+				if existingPod.isEntry {
+					pod.Labels[workloadv1alpha1.EntryLabelKey] = utils.Entry
+				}
+				if existingPod.isReady {
+					pod.Status.Conditions = []corev1.PodCondition{
+						{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+					}
+				}
+				err := podIndexer.Add(pod)
+				assert.NoError(t, err)
 
-			controller.DeleteRole(context.Background(), ms, groupName, roleName, roleID)
+				// Add to store's running pods
+				store.AddRunningPodToServingGroup(
+					types.NamespacedName{Namespace: ns, Name: msName},
+					groupName, pod.Name, revision, roleName, roleID,
+				)
+			}
 
-			finalStatus := controller.store.GetRoleStatus(nsn, groupName, roleName, roleID)
-			assert.Equal(t, tt.expectedFinalStatus, finalStatus)
+			// Set initial role status if role exists in store
+			if tt.initialRoleStatus != datastore.RoleNotFound {
+				// Ensure the role exists in the store first
+				store.AddServingGroupAndRole(
+					types.NamespacedName{Namespace: ns, Name: msName},
+					groupName, revision, roleName, roleID,
+				)
+				err = store.UpdateRoleStatus(
+					types.NamespacedName{Namespace: ns, Name: msName},
+					groupName, roleName, roleID, tt.initialRoleStatus,
+				)
+				assert.NoError(t, err)
+			}
 
-			queueLen := len(queue)
-			if tt.expectEnqueueCalled {
-				assert.True(t, queueLen > 0, "should enqueue")
+			// Create the new pod that triggers handleReadyPod
+			var newPodName string
+			if tt.newPodIsEntry {
+				newPodName = groupName + "-" + roleName + "-0"
 			} else {
-				assert.Equal(t, 0, queueLen, "should not enqueue")
+				newPodName = fmt.Sprintf("%s-%s-%d", groupName, roleName, tt.newPodWorkerID)
 			}
+
+			newPod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: ns,
+					Name:      newPodName,
+					Labels: map[string]string{
+						workloadv1alpha1.ModelServingNameLabelKey: msName,
+						workloadv1alpha1.GroupNameLabelKey:        groupName,
+						workloadv1alpha1.RoleLabelKey:             roleName,
+						workloadv1alpha1.RoleIDKey:                roleID,
+						workloadv1alpha1.RevisionLabelKey:         revision,
+					},
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							APIVersion: workloadv1alpha1.GroupVersion.String(),
+							Kind:       "ModelServing",
+							Name:       msName,
+							UID:        ms.UID,
+						},
+					},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{
+						{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+					},
+				},
+			}
+			if tt.newPodIsEntry {
+				newPod.Labels[workloadv1alpha1.EntryLabelKey] = utils.Entry
+			}
+
+			// Add new pod to indexer
+			err = podIndexer.Add(newPod)
+			assert.NoError(t, err)
+
+			// Call handleReadyPod
+			err = controller.handleReadyPod(ms, groupName, newPod)
+			assert.NoError(t, err)
+
+			// Verify role status
+			actualRoleStatus := store.GetRoleStatus(
+				types.NamespacedName{Namespace: ns, Name: msName},
+				groupName, roleName, roleID,
+			)
+			assert.Equal(t, tt.expectedRoleStatus, actualRoleStatus,
+				"Role status mismatch: expected %s, got %s", tt.expectedRoleStatus, actualRoleStatus)
 		})
 	}
 }
@@ -5613,139 +5931,6 @@ func TestDeleteServingGroupRollbackOnFailure(t *testing.T) {
 			} else {
 				assert.Equal(t, 0, queueLen, "should not have enqueued for reconcile")
 			}
-=======
-			// Create controller with workqueue
-			controller := &ModelServingController{
-				kubeClientSet:    kubeClient,
-				podsInformer:     podInformer.Informer(),
-				podsLister:       podInformer.Lister(),
-				servicesInformer: serviceInformer.Informer(),
-				servicesLister:   serviceInformer.Lister(),
-				store:            store,
-				workqueue:        workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()),
-			}
-
-			// Start informers
-			stop := make(chan struct{})
-			defer close(stop)
-			kubeInformerFactory.Start(stop)
-			kubeInformerFactory.WaitForCacheSync(stop)
-
-			podIndexer := podInformer.Informer().GetIndexer()
-
-			// Add existing pods to indexer
-			for _, existingPod := range tt.existingPods {
-				pod := &corev1.Pod{
-					ObjectMeta: metav1.ObjectMeta{
-						Namespace: ns,
-						Name:      existingPod.name,
-						Labels: map[string]string{
-							workloadv1alpha1.ModelServingNameLabelKey: msName,
-							workloadv1alpha1.GroupNameLabelKey:        groupName,
-							workloadv1alpha1.RoleLabelKey:             roleName,
-							workloadv1alpha1.RoleIDKey:                roleID,
-							workloadv1alpha1.RevisionLabelKey:         revision,
-						},
-						OwnerReferences: []metav1.OwnerReference{
-							{
-								APIVersion: workloadv1alpha1.GroupVersion.String(),
-								Kind:       "ModelServing",
-								Name:       msName,
-								UID:        ms.UID,
-							},
-						},
-					},
-					Status: corev1.PodStatus{
-						Phase: corev1.PodRunning,
-					},
-				}
-				if existingPod.isEntry {
-					pod.Labels[workloadv1alpha1.EntryLabelKey] = utils.Entry
-				}
-				if existingPod.isReady {
-					pod.Status.Conditions = []corev1.PodCondition{
-						{Type: corev1.PodReady, Status: corev1.ConditionTrue},
-					}
-				}
-				err := podIndexer.Add(pod)
-				assert.NoError(t, err)
-
-				// Add to store's running pods
-				store.AddRunningPodToServingGroup(
-					types.NamespacedName{Namespace: ns, Name: msName},
-					groupName, pod.Name, revision, roleName, roleID,
-				)
-			}
-
-			// Set initial role status if role exists in store
-			if tt.initialRoleStatus != datastore.RoleNotFound {
-				// Ensure the role exists in the store first
-				store.AddServingGroupAndRole(
-					types.NamespacedName{Namespace: ns, Name: msName},
-					groupName, revision, roleName, roleID,
-				)
-				err = store.UpdateRoleStatus(
-					types.NamespacedName{Namespace: ns, Name: msName},
-					groupName, roleName, roleID, tt.initialRoleStatus,
-				)
-				assert.NoError(t, err)
-			}
-
-			// Create the new pod that triggers handleReadyPod
-			var newPodName string
-			if tt.newPodIsEntry {
-				newPodName = groupName + "-" + roleName + "-0"
-			} else {
-				newPodName = fmt.Sprintf("%s-%s-%d", groupName, roleName, tt.newPodWorkerID)
-			}
-
-			newPod := &corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{
-					Namespace: ns,
-					Name:      newPodName,
-					Labels: map[string]string{
-						workloadv1alpha1.ModelServingNameLabelKey: msName,
-						workloadv1alpha1.GroupNameLabelKey:        groupName,
-						workloadv1alpha1.RoleLabelKey:             roleName,
-						workloadv1alpha1.RoleIDKey:                roleID,
-						workloadv1alpha1.RevisionLabelKey:         revision,
-					},
-					OwnerReferences: []metav1.OwnerReference{
-						{
-							APIVersion: workloadv1alpha1.GroupVersion.String(),
-							Kind:       "ModelServing",
-							Name:       msName,
-							UID:        ms.UID,
-						},
-					},
-				},
-				Status: corev1.PodStatus{
-					Phase: corev1.PodRunning,
-					Conditions: []corev1.PodCondition{
-						{Type: corev1.PodReady, Status: corev1.ConditionTrue},
-					},
-				},
-			}
-			if tt.newPodIsEntry {
-				newPod.Labels[workloadv1alpha1.EntryLabelKey] = utils.Entry
-			}
-
-			// Add new pod to indexer
-			err = podIndexer.Add(newPod)
-			assert.NoError(t, err)
-
-			// Call handleReadyPod
-			err = controller.handleReadyPod(ms, groupName, newPod)
-			assert.NoError(t, err)
-
-			// Verify role status
-			actualRoleStatus := store.GetRoleStatus(
-				types.NamespacedName{Namespace: ns, Name: msName},
-				groupName, roleName, roleID,
-			)
-			assert.Equal(t, tt.expectedRoleStatus, actualRoleStatus,
-				"Role status mismatch: expected %s, got %s", tt.expectedRoleStatus, actualRoleStatus)
->>>>>>> b95c2df (Fix role status never transitioning to Running)
 		})
 	}
 }
