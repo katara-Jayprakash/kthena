@@ -322,7 +322,7 @@ func (c *ModelServingController) updatePod(_, newObj interface{}) {
 			c.store.AddServingGroupAndRole(types.NamespacedName{
 				Namespace: ms.Namespace,
 				Name:      ms.Name,
-			}, servingGroupName, utils.Revision(newPod), utils.GetRoleName(newPod), utils.GetRoleID(newPod))
+			}, servingGroupName, utils.ObjectRevision(newPod), utils.GetRoleName(newPod), utils.GetRoleID(newPod))
 		}
 	}
 }
@@ -428,7 +428,7 @@ func (c *ModelServingController) deletePodGroup(obj interface{}) {
 		return
 	}
 
-	// skip handling if service revision mismatches serving group revision or owner mismatch
+	// skip handling if podGroup revision mismatches serving group revision or owner mismatch
 	if c.shouldSkipHandling(ms, servingGroupName, pg) {
 		return
 	}
@@ -1294,26 +1294,6 @@ func (c *ModelServingController) shouldSkipHandling(ms *workloadv1alpha1.ModelSe
 		// If the pod is not owned by the ModelServing, we do not need to handle it.
 		klog.V(4).Infof("object %s/%s maybe left from previous same named ModelServing %s/%s, skip handling",
 			obj.GetNamespace(), obj.GetName(), ms.Namespace, ms.Name)
-		return true
-	}
-
-	revision := utils.ObjectRevision(obj)
-	// Headless Service and PodGroup do not have revision labels.
-	// And Rolling updates do not affect Headless Services or podGroups.
-	if revision == "" {
-		_, ok := obj.(*corev1.Pod)
-		if !ok {
-			return false
-		}
-	}
-	servingGroup := c.store.GetServingGroup(types.NamespacedName{
-		Namespace: ms.Namespace,
-		Name:      ms.Name,
-	}, servingGroupName)
-	if servingGroup != nil && servingGroup.Revision != revision {
-		// If the pod revision is not equal to the ServingGroup revision, we do not need to handle it.
-		klog.V(4).Infof("object %s/%s revision %s is not equal to ServingGroup %s revision %s, skip handling",
-			obj.GetNamespace(), obj.GetName(), revision, servingGroupName, servingGroup.Revision)
 		return true
 	}
 	return false

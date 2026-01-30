@@ -37,9 +37,9 @@ import (
 	kubetesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/utils/ptr"
+	schedulingv1beta1 "volcano.sh/apis/pkg/apis/scheduling/v1beta1"
 	volcanofake "volcano.sh/apis/pkg/client/clientset/versioned/fake"
 	volcanoinformers "volcano.sh/apis/pkg/client/informers/externalversions"
-	schedulingv1beta1 "volcano.sh/apis/pkg/apis/scheduling/v1beta1"
 
 	kthenafake "github.com/volcano-sh/kthena/client-go/clientset/versioned/fake"
 	informersv1alpha1 "github.com/volcano-sh/kthena/client-go/informers/externalversions"
