@@ -1066,10 +1066,28 @@ func (c *ModelServingController) handleReadyPod(ms *workloadv1alpha1.ModelServin
 	}
 
 	// Add the running pod to the global storage and try to update the ServingGroup status
+	roleName := utils.GetRoleName(newPod)
+	roleID := utils.GetRoleID(newPod)
 	c.store.AddRunningPodToServingGroup(types.NamespacedName{
 		Namespace: ms.Namespace,
 		Name:      ms.Name,
-	}, servingGroupName, newPod.Name, utils.ObjectRevision(newPod), utils.GetRoleName(newPod), utils.GetRoleID(newPod))
+	}, servingGroupName, newPod.Name, utils.ObjectRevision(newPod), roleName, roleID)
+
+	// Check and update role status to Running when all pods in the role are ready
+	roleReady, err := c.checkRoleReady(ms, servingGroupName, roleName, roleID)
+	if err != nil {
+		klog.Warningf("failed to check role %s/%s readiness, skipping role status update: %v", roleName, roleID, err)
+	} else if roleReady {
+		currentRoleStatus := c.store.GetRoleStatus(utils.GetNamespaceName(ms), servingGroupName, roleName, roleID)
+		if currentRoleStatus != datastore.RoleRunning && currentRoleStatus != datastore.RoleDeleting {
+			if err := c.store.UpdateRoleStatus(utils.GetNamespaceName(ms), servingGroupName, roleName, roleID, datastore.RoleRunning); err != nil {
+				klog.Warningf("failed to update role %s/%s status to Running: %v", roleName, roleID, err)
+			} else {
+				klog.V(2).Infof("Update role %s/%s status to Running", roleName, roleID)
+			}
+		}
+	}
+
 	ready, err := c.checkServingGroupReady(ms, servingGroupName)
 	if err != nil {
 		return fmt.Errorf("failed to check ServingGroup status, err: %v", err)

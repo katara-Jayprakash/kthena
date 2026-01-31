@@ -17,6 +17,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -36,6 +37,7 @@ import (
 	kubefake "k8s.io/client-go/kubernetes/fake"
 	kubetesting "k8s.io/client-go/testing"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/ptr"
 	schedulingv1beta1 "volcano.sh/apis/pkg/apis/scheduling/v1beta1"
 	volcanofake "volcano.sh/apis/pkg/client/clientset/versioned/fake"
@@ -2331,7 +2333,7 @@ func TestScaleDownServingGroupsWithPriorityAndDeletionCost(t *testing.T) {
 		description            string
 	}{
 		{
-			name:            "not_ready_groups_deleted_first",
+			name:            "deletes groups that are still creating before running groups",
 			existingIndices: []int{0, 1, 2, 3},
 			expectedCount:   2,
 			groupStatuses: map[int]datastore.ServingGroupStatus{
@@ -2345,7 +2347,7 @@ func TestScaleDownServingGroupsWithPriorityAndDeletionCost(t *testing.T) {
 			description:            "Groups in non-running state should be deleted first regardless of index",
 		},
 		{
-			name:            "lower_deletion_cost_deleted_first_among_ready",
+			name:            "deletes groups with lower deletion cost first when all are running",
 			existingIndices: []int{0, 1, 2, 3},
 			expectedCount:   2,
 			groupStatuses: map[int]datastore.ServingGroupStatus{
@@ -2364,7 +2366,7 @@ func TestScaleDownServingGroupsWithPriorityAndDeletionCost(t *testing.T) {
 			description:            "Among ready groups, lower deletion cost should be deleted first",
 		},
 		{
-			name:            "not_ready_status_has_priority_over_deletion_cost",
+			name:            "deletes creating groups even if they have high deletion cost",
 			existingIndices: []int{0, 1, 2, 3},
 			expectedCount:   2,
 			groupStatuses: map[int]datastore.ServingGroupStatus{
@@ -2383,7 +2385,7 @@ func TestScaleDownServingGroupsWithPriorityAndDeletionCost(t *testing.T) {
 			description:            "Not-ready status should take priority over deletion cost",
 		},
 		{
-			name:            "mixed_status_and_deletion_cost",
+			name:            "deletes scaling and deleting groups first then picks lowest cost among running",
 			existingIndices: []int{0, 1, 2, 3, 4},
 			expectedCount:   2,
 			groupStatuses: map[int]datastore.ServingGroupStatus{
@@ -2404,7 +2406,7 @@ func TestScaleDownServingGroupsWithPriorityAndDeletionCost(t *testing.T) {
 			description:            "Complex scenario with mixed status and costs",
 		},
 		{
-			name:            "all_groups_not_ready_delete_by_index",
+			name:            "falls back to deleting higher indices when all groups are not ready",
 			existingIndices: []int{0, 1, 2, 3},
 			expectedCount:   2,
 			groupStatuses: map[int]datastore.ServingGroupStatus{
@@ -2418,7 +2420,7 @@ func TestScaleDownServingGroupsWithPriorityAndDeletionCost(t *testing.T) {
 			description:            "When all groups are not ready, fall back to index-based deletion",
 		},
 		{
-			name:            "same_deletion_cost_use_index_as_tiebreaker",
+			name:            "uses higher index as tiebreaker when deletion costs are equal",
 			existingIndices: []int{0, 1, 2, 3},
 			expectedCount:   2,
 			groupStatuses: map[int]datastore.ServingGroupStatus{
@@ -2437,7 +2439,7 @@ func TestScaleDownServingGroupsWithPriorityAndDeletionCost(t *testing.T) {
 			description:            "When deletion costs are equal, use index as tiebreaker",
 		},
 		{
-			name:            "negative_deletion_cost_prioritized_for_deletion",
+			name:            "prioritizes deleting groups with negative deletion cost",
 			existingIndices: []int{0, 1, 2, 3},
 			expectedCount:   2,
 			groupStatuses: map[int]datastore.ServingGroupStatus{
@@ -3538,7 +3540,7 @@ func TestScaleDownRolesWithPriorityAndDeletionCost(t *testing.T) {
 		description            string
 	}{
 		{
-			name:            "not_ready_roles_deleted_first",
+			name:            "deletes roles that are still creating before running roles",
 			existingIndices: []int{0, 1, 2, 3},
 			expectedCount:   2,
 			roleStatuses: map[int]datastore.RoleStatus{
@@ -3552,7 +3554,7 @@ func TestScaleDownRolesWithPriorityAndDeletionCost(t *testing.T) {
 			description:            "Roles in non-running state should be deleted first regardless of index",
 		},
 		{
-			name:            "lower_deletion_cost_deleted_first_among_ready",
+			name:            "deletes roles with lower deletion cost first when all are running",
 			existingIndices: []int{0, 1, 2, 3},
 			expectedCount:   2,
 			roleStatuses: map[int]datastore.RoleStatus{
@@ -3571,7 +3573,7 @@ func TestScaleDownRolesWithPriorityAndDeletionCost(t *testing.T) {
 			description:            "Among ready roles, lower deletion cost should be deleted first",
 		},
 		{
-			name:            "not_ready_status_has_priority_over_deletion_cost",
+			name:            "deletes creating roles even if they have high deletion cost",
 			existingIndices: []int{0, 1, 2, 3},
 			expectedCount:   2,
 			roleStatuses: map[int]datastore.RoleStatus{
@@ -3590,7 +3592,7 @@ func TestScaleDownRolesWithPriorityAndDeletionCost(t *testing.T) {
 			description:            "Not-ready status should take priority over deletion cost",
 		},
 		{
-			name:            "mixed_status_and_deletion_cost",
+			name:            "deletes not-found and deleting roles first then picks lowest cost among running",
 			existingIndices: []int{0, 1, 2, 3, 4},
 			expectedCount:   2,
 			roleStatuses: map[int]datastore.RoleStatus{
@@ -3611,7 +3613,7 @@ func TestScaleDownRolesWithPriorityAndDeletionCost(t *testing.T) {
 			description:            "Complex scenario with mixed status and costs",
 		},
 		{
-			name:            "all_roles_not_ready_delete_by_index",
+			name:            "falls back to deleting higher indices when all roles are not ready",
 			existingIndices: []int{0, 1, 2, 3},
 			expectedCount:   2,
 			roleStatuses: map[int]datastore.RoleStatus{
@@ -3625,7 +3627,7 @@ func TestScaleDownRolesWithPriorityAndDeletionCost(t *testing.T) {
 			description:            "When all roles are not ready, fall back to index-based deletion",
 		},
 		{
-			name:            "same_deletion_cost_use_index_as_tiebreaker",
+			name:            "uses higher index as tiebreaker when deletion costs are equal",
 			existingIndices: []int{0, 1, 2, 3},
 			expectedCount:   2,
 			roleStatuses: map[int]datastore.RoleStatus{
@@ -3644,7 +3646,7 @@ func TestScaleDownRolesWithPriorityAndDeletionCost(t *testing.T) {
 			description:            "When deletion costs are equal, use index as tiebreaker",
 		},
 		{
-			name:            "negative_deletion_cost_prioritized_for_deletion",
+			name:            "prioritizes deleting roles with negative deletion cost",
 			existingIndices: []int{0, 1, 2, 3},
 			expectedCount:   2,
 			roleStatuses: map[int]datastore.RoleStatus{
@@ -3663,7 +3665,7 @@ func TestScaleDownRolesWithPriorityAndDeletionCost(t *testing.T) {
 			description:            "Negative deletion cost should prioritize deletion",
 		},
 		{
-			name:            "partial_deletion_costs_use_index_for_unspecified",
+			name:            "treats roles without deletion cost annotation as zero cost",
 			existingIndices: []int{0, 1, 2, 3},
 			expectedCount:   2,
 			roleStatuses: map[int]datastore.RoleStatus{
@@ -3963,6 +3965,187 @@ func TestCalculateRoleScore(t *testing.T) {
 			// Verify the deletion cost matches expected
 			assert.Equal(t, tt.podDeletionCost, score.DeletionCost,
 				fmt.Sprintf("%s: expected deletion cost %d, got %d", tt.description, tt.podDeletionCost, score.DeletionCost))
+		})
+	}
+}
+
+// TestScaleDownRolesRunningStatusDeprioritized tests that roles with RoleRunning status
+// are deprioritized (deleted last) during scale-down operations compared to roles
+// in RoleCreating or RoleNotFound states.
+func TestScaleDownRolesRunningStatusDeprioritized(t *testing.T) {
+	tests := []struct {
+		name                   string
+		existingIndices        []int
+		roleStatuses           map[int]datastore.RoleStatus
+		expectedCount          int
+		expectedRemainingNames []string
+		description            string
+	}{
+		{
+			name:            "keeps running roles and deletes creating roles first",
+			existingIndices: []int{0, 1, 2},
+			roleStatuses: map[int]datastore.RoleStatus{
+				0: datastore.RoleRunning,
+				1: datastore.RoleCreating, // Not ready - should be deleted first
+				2: datastore.RoleRunning,
+			},
+			expectedCount:          2,
+			expectedRemainingNames: []string{"prefill-0", "prefill-2"},
+			description:            "RoleCreating (index 1) should be deleted before RoleRunning roles",
+		},
+		{
+			name:            "keeps running roles and deletes not-found roles first",
+			existingIndices: []int{0, 1, 2},
+			roleStatuses: map[int]datastore.RoleStatus{
+				0: datastore.RoleRunning,
+				1: datastore.RoleNotFound, // Not ready - should be deleted first
+				2: datastore.RoleRunning,
+			},
+			expectedCount:          2,
+			expectedRemainingNames: []string{"prefill-0", "prefill-2"},
+			description:            "RoleNotFound (index 1) should be deleted before RoleRunning roles",
+		},
+		{
+			name:            "deletes higher index roles first when all are running",
+			existingIndices: []int{0, 1, 2, 3},
+			roleStatuses: map[int]datastore.RoleStatus{
+				0: datastore.RoleRunning,
+				1: datastore.RoleRunning,
+				2: datastore.RoleRunning,
+				3: datastore.RoleRunning,
+			},
+			expectedCount:          2,
+			expectedRemainingNames: []string{"prefill-0", "prefill-1"},
+			description:            "Among all RoleRunning roles, higher indices (3, 2) should be deleted first",
+		},
+		{
+			name:            "deletes all creating and not-found roles before touching running roles",
+			existingIndices: []int{0, 1, 2, 3},
+			roleStatuses: map[int]datastore.RoleStatus{
+				0: datastore.RoleCreating, // Not ready - delete first
+				1: datastore.RoleRunning,
+				2: datastore.RoleNotFound, // Not ready - delete first
+				3: datastore.RoleRunning,
+			},
+			expectedCount:          2,
+			expectedRemainingNames: []string{"prefill-1", "prefill-3"},
+			description:            "Both not-ready roles (0, 2) should be deleted, keeping both Running roles (1, 3)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Setup fake clients
+			kubeClient := kubefake.NewSimpleClientset()
+			kthenaClient := kthenafake.NewSimpleClientset()
+			volcanoClient := volcanofake.NewSimpleClientset()
+			apiextClient := apiextfake.NewSimpleClientset(testhelper.CreatePodGroupCRD())
+
+			controller, err := NewModelServingController(kubeClient, kthenaClient, volcanoClient, apiextClient)
+			assert.NoError(t, err)
+
+			// Create ModelServing
+			ms := &workloadv1alpha1.ModelServing{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-ms",
+					Namespace: "default",
+				},
+				Spec: workloadv1alpha1.ModelServingSpec{
+					Replicas: ptr.To[int32](1),
+					Template: workloadv1alpha1.ServingGroup{
+						Roles: []workloadv1alpha1.Role{
+							{
+								Name:     "prefill",
+								Replicas: ptr.To[int32](int32(tt.expectedCount)),
+							},
+						},
+					},
+				},
+			}
+
+			groupName := "test-ms-0"
+			nsn := utils.GetNamespaceName(ms)
+
+			// Add serving group
+			controller.store.AddServingGroup(nsn, 0, "test-revision")
+
+			// Create roles with specified statuses
+			var roleList []datastore.Role
+			for _, idx := range tt.existingIndices {
+				roleID := fmt.Sprintf("prefill-%d", idx)
+				controller.store.AddRole(nsn, groupName, "prefill", roleID, "test-revision")
+				controller.store.UpdateRoleStatus(nsn, groupName, "prefill", roleID, tt.roleStatuses[idx])
+				roleList = append(roleList, datastore.Role{
+					Name:     roleID, // In datastore.Role, Name holds the roleID
+					Revision: "test-revision",
+					Status:   tt.roleStatuses[idx],
+				})
+			}
+
+			// Create mock pods for each role
+			podIndexer := controller.podsInformer.GetIndexer()
+			for _, idx := range tt.existingIndices {
+				roleID := fmt.Sprintf("prefill-%d", idx)
+				pod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: "default",
+						Name:      fmt.Sprintf("pod-%s", roleID),
+						Labels: map[string]string{
+							workloadv1alpha1.ModelServingNameLabelKey: ms.Name,
+							workloadv1alpha1.GroupNameLabelKey:        groupName,
+							workloadv1alpha1.RoleLabelKey:             "prefill",
+							workloadv1alpha1.RoleIDKey:                roleID,
+							workloadv1alpha1.EntryLabelKey:            utils.Entry,
+						},
+						Annotations: map[string]string{
+							PodDeletionCostAnnotation: "0",
+						},
+					},
+				}
+				err := podIndexer.Add(pod)
+				assert.NoError(t, err)
+			}
+
+			// Track which roles are deleted (targeted for deletion)
+			var deletedRoleIDs []string
+			patch := gomonkey.NewPatches()
+			patch.ApplyMethod(reflect.TypeOf(controller), "DeleteRole", func(_ *ModelServingController, ctx context.Context, ms *workloadv1alpha1.ModelServing, groupName, roleName, roleID string) {
+				deletedRoleIDs = append(deletedRoleIDs, roleID)
+			})
+			defer patch.Reset()
+
+			// Target role (using first role's spec)
+			targetRole := workloadv1alpha1.Role{
+				Name:     "prefill",
+				Replicas: ptr.To[int32](int32(tt.expectedCount)),
+			}
+
+			// Run scaleDownRoles
+			controller.scaleDownRoles(context.Background(), ms, groupName, targetRole, roleList, tt.expectedCount)
+
+			// Calculate expected deleted roles (all roles except expectedRemainingNames)
+			allRoleIDs := make(map[string]bool)
+			for _, idx := range tt.existingIndices {
+				allRoleIDs[fmt.Sprintf("prefill-%d", idx)] = true
+			}
+			for _, remaining := range tt.expectedRemainingNames {
+				delete(allRoleIDs, remaining)
+			}
+			var expectedDeletedRoleIDs []string
+			for id := range allRoleIDs {
+				expectedDeletedRoleIDs = append(expectedDeletedRoleIDs, id)
+			}
+
+			// Verify correct number of deletions
+			numToDelete := len(tt.existingIndices) - tt.expectedCount
+			assert.Equal(t, numToDelete, len(deletedRoleIDs),
+				"Expected %d deletions, got %d", numToDelete, len(deletedRoleIDs))
+
+			// Verify the correct roles were targeted for deletion
+			sort.Strings(deletedRoleIDs)
+			sort.Strings(expectedDeletedRoleIDs)
+			assert.Equal(t, expectedDeletedRoleIDs, deletedRoleIDs,
+				"%s: Expected deleted roles %v, got %v", tt.description, expectedDeletedRoleIDs, deletedRoleIDs)
 		})
 	}
 }
@@ -5284,6 +5467,330 @@ func TestDeleteRoleRollbackOnFailure(t *testing.T) {
 			} else {
 				assert.Equal(t, 0, queueLen, "should not enqueue")
 			}
+		})
+	}
+}
+
+// TestHandleReadyPodRoleStatusUpdate tests that handleReadyPod correctly updates
+// role status to Running when all pods in the role are ready.
+// This tests the fix for the bug where role status was never set to RoleRunning,
+// which broke the scale-down priority protection for healthy roles.
+func TestHandleReadyPodRoleStatusUpdate(t *testing.T) {
+	ns := "default"
+	msName := "test-ms"
+	groupName := "test-ms-0"
+	roleName := "prefill"
+	roleID := "prefill-0"
+	revision := "hash123"
+
+	tests := []struct {
+		description    string
+		workerReplicas int32
+		existingPods   []struct {
+			name     string
+			isReady  bool
+			isEntry  bool
+			workerID int // 0 for entry, 1+ for workers
+		}
+		newPodIsEntry      bool
+		newPodWorkerID     int
+		initialRoleStatus  datastore.RoleStatus
+		expectedRoleStatus datastore.RoleStatus
+	}{
+		{
+			description:    "single entry pod becomes ready - role should transition to Running",
+			workerReplicas: 0,
+			existingPods: []struct {
+				name     string
+				isReady  bool
+				isEntry  bool
+				workerID int
+			}{},
+			newPodIsEntry:      true,
+			newPodWorkerID:     0,
+			initialRoleStatus:  datastore.RoleCreating,
+			expectedRoleStatus: datastore.RoleRunning,
+		},
+		{
+			description:    "entry pod ready but workers not ready - role should stay Creating",
+			workerReplicas: 2,
+			existingPods: []struct {
+				name     string
+				isReady  bool
+				isEntry  bool
+				workerID int
+			}{
+				{name: groupName + "-" + roleName + "-1", isReady: false, isEntry: false, workerID: 1},
+				{name: groupName + "-" + roleName + "-2", isReady: false, isEntry: false, workerID: 2},
+			},
+			newPodIsEntry:      true,
+			newPodWorkerID:     0,
+			initialRoleStatus:  datastore.RoleCreating,
+			expectedRoleStatus: datastore.RoleCreating,
+		},
+		{
+			description:    "all pods ready including new worker - role should transition to Running",
+			workerReplicas: 2,
+			existingPods: []struct {
+				name     string
+				isReady  bool
+				isEntry  bool
+				workerID int
+			}{
+				{name: groupName + "-" + roleName + "-0", isReady: true, isEntry: true, workerID: 0},
+				{name: groupName + "-" + roleName + "-1", isReady: true, isEntry: false, workerID: 1},
+			},
+			newPodIsEntry:      false,
+			newPodWorkerID:     2,
+			initialRoleStatus:  datastore.RoleCreating,
+			expectedRoleStatus: datastore.RoleRunning,
+		},
+		{
+			description:    "last worker becomes ready - role should transition to Running",
+			workerReplicas: 1,
+			existingPods: []struct {
+				name     string
+				isReady  bool
+				isEntry  bool
+				workerID int
+			}{
+				{name: groupName + "-" + roleName + "-0", isReady: true, isEntry: true, workerID: 0},
+			},
+			newPodIsEntry:      false,
+			newPodWorkerID:     1,
+			initialRoleStatus:  datastore.RoleCreating,
+			expectedRoleStatus: datastore.RoleRunning,
+		},
+		{
+			description:    "role already Running - should stay Running",
+			workerReplicas: 0,
+			existingPods: []struct {
+				name     string
+				isReady  bool
+				isEntry  bool
+				workerID int
+			}{},
+			newPodIsEntry:      true,
+			newPodWorkerID:     0,
+			initialRoleStatus:  datastore.RoleRunning,
+			expectedRoleStatus: datastore.RoleRunning,
+		},
+		{
+			description:    "role in Deleting state - should not change to Running",
+			workerReplicas: 0,
+			existingPods: []struct {
+				name     string
+				isReady  bool
+				isEntry  bool
+				workerID int
+			}{},
+			newPodIsEntry:      true,
+			newPodWorkerID:     0,
+			initialRoleStatus:  datastore.RoleDeleting,
+			expectedRoleStatus: datastore.RoleDeleting,
+		},
+		{
+			description:    "one of multiple workers still not ready - role should stay Creating",
+			workerReplicas: 3,
+			existingPods: []struct {
+				name     string
+				isReady  bool
+				isEntry  bool
+				workerID int
+			}{
+				{name: groupName + "-" + roleName + "-0", isReady: true, isEntry: true, workerID: 0},
+				{name: groupName + "-" + roleName + "-1", isReady: true, isEntry: false, workerID: 1},
+				{name: groupName + "-" + roleName + "-3", isReady: false, isEntry: false, workerID: 3}, // not ready
+			},
+			newPodIsEntry:      false,
+			newPodWorkerID:     2,
+			initialRoleStatus:  datastore.RoleCreating,
+			expectedRoleStatus: datastore.RoleCreating,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.description, func(t *testing.T) {
+			// Setup fake clients
+			kubeClient := kubefake.NewSimpleClientset()
+
+			// Create informer factory
+			kubeInformerFactory := informers.NewSharedInformerFactory(kubeClient, 0)
+			podInformer := kubeInformerFactory.Core().V1().Pods()
+			serviceInformer := kubeInformerFactory.Core().V1().Services()
+
+			err := podInformer.Informer().AddIndexers(cache.Indexers{
+				GroupNameKey: utils.GroupNameIndexFunc,
+				RoleIDKey:    utils.RoleIDIndexFunc,
+			})
+			assert.NoError(t, err)
+
+			err = serviceInformer.Informer().AddIndexers(cache.Indexers{
+				GroupNameKey: utils.GroupNameIndexFunc,
+				RoleIDKey:    utils.RoleIDIndexFunc,
+			})
+			assert.NoError(t, err)
+
+			// Create store and add initial role status
+			store := datastore.New()
+
+			// Create ModelServing
+			ms := &workloadv1alpha1.ModelServing{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: ns,
+					Name:      msName,
+					UID:       "test-ms-uid",
+				},
+				Spec: workloadv1alpha1.ModelServingSpec{
+					Replicas: ptr.To[int32](1),
+					Template: workloadv1alpha1.ServingGroup{
+						Roles: []workloadv1alpha1.Role{
+							{
+								Name:           roleName,
+								Replicas:       ptr.To[int32](1),
+								WorkerReplicas: tt.workerReplicas,
+								EntryTemplate: workloadv1alpha1.PodTemplateSpec{
+									Spec: corev1.PodSpec{
+										Containers: []corev1.Container{{Name: "main", Image: "nginx"}},
+									},
+								},
+							},
+						},
+					},
+				},
+			}
+
+			// Create controller with workqueue
+			controller := &ModelServingController{
+				kubeClientSet:    kubeClient,
+				podsInformer:     podInformer.Informer(),
+				podsLister:       podInformer.Lister(),
+				servicesInformer: serviceInformer.Informer(),
+				servicesLister:   serviceInformer.Lister(),
+				store:            store,
+				workqueue:        workqueue.NewRateLimitingQueue(workqueue.DefaultControllerRateLimiter()), //nolint:staticcheck
+			}
+
+			// Start informers
+			stop := make(chan struct{})
+			defer close(stop)
+			kubeInformerFactory.Start(stop)
+			kubeInformerFactory.WaitForCacheSync(stop)
+
+			podIndexer := podInformer.Informer().GetIndexer()
+
+			// Add existing pods to indexer
+			for _, existingPod := range tt.existingPods {
+				pod := &corev1.Pod{
+					ObjectMeta: metav1.ObjectMeta{
+						Namespace: ns,
+						Name:      existingPod.name,
+						Labels: map[string]string{
+							workloadv1alpha1.ModelServingNameLabelKey: msName,
+							workloadv1alpha1.GroupNameLabelKey:        groupName,
+							workloadv1alpha1.RoleLabelKey:             roleName,
+							workloadv1alpha1.RoleIDKey:                roleID,
+							workloadv1alpha1.RevisionLabelKey:         revision,
+						},
+						OwnerReferences: []metav1.OwnerReference{
+							{
+								APIVersion: workloadv1alpha1.GroupVersion.String(),
+								Kind:       "ModelServing",
+								Name:       msName,
+								UID:        ms.UID,
+							},
+						},
+					},
+					Status: corev1.PodStatus{
+						Phase: corev1.PodRunning,
+					},
+				}
+				if existingPod.isEntry {
+					pod.Labels[workloadv1alpha1.EntryLabelKey] = utils.Entry
+				}
+				if existingPod.isReady {
+					pod.Status.Conditions = []corev1.PodCondition{
+						{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+					}
+				}
+				err := podIndexer.Add(pod)
+				assert.NoError(t, err)
+
+				// Add to store's running pods
+				store.AddRunningPodToServingGroup(
+					types.NamespacedName{Namespace: ns, Name: msName},
+					groupName, pod.Name, revision, roleName, roleID,
+				)
+			}
+
+			// Set initial role status if role exists in store
+			if tt.initialRoleStatus != datastore.RoleNotFound {
+				// Ensure the role exists in the store first
+				store.AddServingGroupAndRole(
+					types.NamespacedName{Namespace: ns, Name: msName},
+					groupName, revision, roleName, roleID,
+				)
+				err = store.UpdateRoleStatus(
+					types.NamespacedName{Namespace: ns, Name: msName},
+					groupName, roleName, roleID, tt.initialRoleStatus,
+				)
+				assert.NoError(t, err)
+			}
+
+			// Create the new pod that triggers handleReadyPod
+			var newPodName string
+			if tt.newPodIsEntry {
+				newPodName = groupName + "-" + roleName + "-0"
+			} else {
+				newPodName = fmt.Sprintf("%s-%s-%d", groupName, roleName, tt.newPodWorkerID)
+			}
+
+			newPod := &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{
+					Namespace: ns,
+					Name:      newPodName,
+					Labels: map[string]string{
+						workloadv1alpha1.ModelServingNameLabelKey: msName,
+						workloadv1alpha1.GroupNameLabelKey:        groupName,
+						workloadv1alpha1.RoleLabelKey:             roleName,
+						workloadv1alpha1.RoleIDKey:                roleID,
+						workloadv1alpha1.RevisionLabelKey:         revision,
+					},
+					OwnerReferences: []metav1.OwnerReference{
+						{
+							APIVersion: workloadv1alpha1.GroupVersion.String(),
+							Kind:       "ModelServing",
+							Name:       msName,
+							UID:        ms.UID,
+						},
+					},
+				},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{
+						{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+					},
+				},
+			}
+			if tt.newPodIsEntry {
+				newPod.Labels[workloadv1alpha1.EntryLabelKey] = utils.Entry
+			}
+
+			// Add new pod to indexer
+			err = podIndexer.Add(newPod)
+			assert.NoError(t, err)
+
+			// Call handleReadyPod
+			err = controller.handleReadyPod(ms, groupName, newPod)
+			assert.NoError(t, err)
+
+			// Verify role status
+			actualRoleStatus := store.GetRoleStatus(
+				types.NamespacedName{Namespace: ns, Name: msName},
+				groupName, roleName, roleID,
+			)
+			assert.Equal(t, tt.expectedRoleStatus, actualRoleStatus,
+				"Role status mismatch: expected %s, got %s", tt.expectedRoleStatus, actualRoleStatus)
 		})
 	}
 }
