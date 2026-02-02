@@ -2862,8 +2862,8 @@ func TestScaleDownServingGroupsWithPartition(t *testing.T) {
 					for _, ordinal := range tt.existingIndices {
 						if ordinal < int(*tt.partition) {
 							groupName := utils.GenerateServingGroupName(msName, ordinal)
-							group := controller.store.GetServingGroup(utils.GetNamespaceName(ms), groupName)
-							assert.NotNil(t, group,
+							_, exists := controller.store.GetServingGroupRevision(utils.GetNamespaceName(ms), groupName)
+							assert.True(t, exists,
 								fmt.Sprintf("[%s] Partition-protected replica R-%d should not be deleted when non-protected groups still exist", tt.description, ordinal))
 						}
 					}

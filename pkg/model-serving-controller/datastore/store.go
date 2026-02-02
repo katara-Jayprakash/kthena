@@ -30,7 +30,6 @@ import (
 // Store is an interface for storing and retrieving data
 type Store interface {
 	GetServingGroupByModelServing(modelServingName types.NamespacedName) ([]ServingGroup, error)
-	GetServingGroup(modelServingName types.NamespacedName, groupName string) *ServingGroup
 	GetServingGroupRevision(modelServingName types.NamespacedName, groupName string) (string, bool)
 	GetRunningPodNumByServingGroup(modelServingName types.NamespacedName, groupName string) (int, error)
 	GetServingGroupStatus(modelServingName types.NamespacedName, groupName string) ServingGroupStatus
@@ -216,18 +215,6 @@ func (s *store) GetRunningPodNumByServingGroup(modelServingName types.Namespaced
 		return 0, nil
 	}
 	return len(group.runningPods), nil
-}
-
-// GetServingGroup returns the GetServingGroup
-func (s *store) GetServingGroup(modelServingName types.NamespacedName, groupName string) *ServingGroup {
-	s.mutex.RLock()
-	defer s.mutex.RUnlock()
-	groups, ok := s.servingGroup[modelServingName]
-	if !ok {
-		return nil
-	}
-
-	return groups[groupName]
 }
 
 // GetServingGroupRevision returns the revision of a ServingGroup.
