@@ -3030,11 +3030,11 @@ func TestModelServingVersionControl(t *testing.T) {
 			// Verify created/recreated groups have correct revisions
 			for ordinal, expectedRevision := range tt.expectedRecreatedRevs {
 				groupName := utils.GenerateServingGroupName(msName, ordinal)
-				group := controller.store.GetServingGroup(utils.GetNamespaceName(ms), groupName)
-				assert.NotNil(t, group, "Group at ordinal %d should exist", ordinal)
-				if group != nil {
-					assert.Equal(t, expectedRevision, group.Revision,
-						"Group at ordinal %d should have revision %s, got %s", ordinal, expectedRevision, group.Revision)
+				revision, exists := controller.store.GetServingGroupRevision(utils.GetNamespaceName(ms), groupName)
+				assert.True(t, exists, "Group at ordinal %d should exist", ordinal)
+				if exists {
+					assert.Equal(t, expectedRevision, revision,
+						"Group at ordinal %d should have revision %s, got %s", ordinal, expectedRevision, revision)
 				}
 			}
 
@@ -3203,11 +3203,11 @@ func TestScaleUpServingGroups_TemplateRecovery(t *testing.T) {
 
 			// Verify the group was created with correct revision
 			groupName := utils.GenerateServingGroupName(msName, tt.ordinal)
-			group := controller.store.GetServingGroup(utils.GetNamespaceName(ms), groupName)
-			assert.NotNil(t, group, "Group should be created")
-			if group != nil {
+			revision, exists := controller.store.GetServingGroupRevision(utils.GetNamespaceName(ms), groupName)
+			assert.True(t, exists, "Group should be created")
+			if exists {
 				// For ordinal < partition, it should use CurrentRevision
-				assert.Equal(t, tt.currentRevision, group.Revision,
+				assert.Equal(t, tt.currentRevision, revision,
 					"Group at ordinal %d should use CurrentRevision %s", tt.ordinal, tt.currentRevision)
 			}
 
