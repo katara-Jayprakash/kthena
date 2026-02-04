@@ -18,23 +18,67 @@ package router
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	networkingv1alpha1 "github.com/volcano-sh/kthena/pkg/apis/networking/v1alpha1"
 	workloadv1alpha1 "github.com/volcano-sh/kthena/pkg/apis/workload/v1alpha1"
+	backendmetrics "github.com/volcano-sh/kthena/pkg/kthena-router/backend/metrics"
 	routercontext "github.com/volcano-sh/kthena/test/e2e/router/context"
 	"github.com/volcano-sh/kthena/test/e2e/utils"
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gatewayv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
+
+const (
+	defaultMetricsURL = "http://127.0.0.1:8080/metrics"
+)
+
+func getCounterValue(metrics map[string]*dto.MetricFamily, metricName string, labels map[string]string) float64 {
+	mf, ok := metrics[metricName]
+	if !ok {
+		return 0
+	}
+	for _, m := range mf.GetMetric() {
+		if matchLabels(m.GetLabel(), labels) {
+			return m.GetCounter().GetValue()
+		}
+	}
+	return 0
+}
+
+func getHistogramCount(metrics map[string]*dto.MetricFamily, metricName string, labels map[string]string) uint64 {
+	mf, ok := metrics[metricName]
+	if !ok {
+		return 0
+	}
+	for _, m := range mf.GetMetric() {
+		if matchLabels(m.GetLabel(), labels) {
+			return m.GetHistogram().GetSampleCount()
+		}
+	}
+	return 0
+}
+
+func matchLabels(metricLabels []*dto.LabelPair, wantLabels map[string]string) bool {
+	labelMap := make(map[string]string)
+	for _, lp := range metricLabels {
+		labelMap[lp.GetName()] = lp.GetValue()
+	}
+	for k, v := range wantLabels {
+		if labelMap[k] != v {
+			return false
+		}
+	}
+	return true
+}
 
 // setupModelRouteWithGatewayAPI configures ModelRoute with ParentRefs to default Gateway if useGatewayAPI is true.
 func setupModelRouteWithGatewayAPI(modelRoute *networkingv1alpha1.ModelRoute, useGatewayAPI bool, kthenaNamespace string) {
@@ -882,52 +926,83 @@ func TestMetricsShared(t *testing.T, testCtx *routercontext.RouterTestContext, t
 		}
 	})
 
-	fetchMetrics := func() string {
-		resp, err := http.Get("http://127.0.0.1:8080/metrics")
-		require.NoError(t, err, "Failed to fetch metrics")
-		defer resp.Body.Close()
-		body, err := io.ReadAll(resp.Body)
-		require.NoError(t, err, "Failed to read metrics response")
-		return string(body)
-	}
-
 	messages := []utils.ChatMessage{
 		utils.NewChatMessage("user", "Hello"),
 	}
 
-	t.Run("VerifyRequestCountMetrics", func(t *testing.T) {
-		for i := 0; i < 3; i++ {
-			resp := utils.CheckChatCompletions(t, modelRoute.Spec.ModelName, messages)
+	t.Run("VerifyRequestCountAndLatencyMetrics", func(t *testing.T) {
+		modelName := modelRoute.Spec.ModelName
+		labels := map[string]string{
+			"model":       modelName,
+			"path":        "/v1/chat/completions",
+			"status_code": "200",
+		}
+
+		// Capture baseline metrics
+		baselineMetrics, err := backendmetrics.ParseMetricsURL(defaultMetricsURL)
+		require.NoError(t, err, "Failed to fetch baseline metrics")
+
+		baselineRequestCount := getCounterValue(baselineMetrics, "kthena_router_requests_total", labels)
+		baselineLatencyCount := getHistogramCount(baselineMetrics, "kthena_router_request_duration_seconds", labels)
+
+		// Send requests
+		for range 3 {
+			resp := utils.CheckChatCompletions(t, modelName, messages)
 			assert.Equal(t, 200, resp.StatusCode)
 		}
 
+		// Verify metrics incremented by exactly numRequests
 		require.Eventually(t, func() bool {
-			metricsBody := fetchMetrics()
-			return strings.Contains(metricsBody, "kthena_router_requests_total") &&
-				strings.Contains(metricsBody, fmt.Sprintf(`model="%s"`, modelRoute.Spec.ModelName)) &&
-				strings.Contains(metricsBody, `status_code="200"`)
-		}, 15*time.Second, time.Second, "Expected metrics for successful requests were not found in time")
-	})
+			currentMetrics, err := backendmetrics.ParseMetricsURL(defaultMetricsURL)
+			if err != nil {
+				return false
+			}
 
-	t.Run("VerifyLatencyMetrics", func(t *testing.T) {
-		resp := utils.CheckChatCompletions(t, modelRoute.Spec.ModelName, messages)
-		assert.Equal(t, 200, resp.StatusCode)
+			currentRequestCount := getCounterValue(currentMetrics, "kthena_router_requests_total", labels)
+			currentLatencyCount := getHistogramCount(currentMetrics, "kthena_router_request_duration_seconds", labels)
 
-		require.Eventually(t, func() bool {
-			metricsBody := fetchMetrics()
-			return strings.Contains(metricsBody, "kthena_router_request_duration_seconds")
-		}, 15*time.Second, time.Second, "Duration histogram metric was not found in time")
+			requestDelta := currentRequestCount - baselineRequestCount
+			latencyDelta := currentLatencyCount - baselineLatencyCount
+
+			t.Logf("Request count: baseline=%.0f, current=%.0f, difference=%.0f (expected %d)",
+				baselineRequestCount, currentRequestCount, requestDelta, 3)
+			t.Logf("Latency count: baseline=%d, current=%d, difference=%d (expected %d)",
+				baselineLatencyCount, currentLatencyCount, latencyDelta, 3)
+
+			return requestDelta == float64(3) && latencyDelta == uint64(3)
+		}, 15*time.Second, time.Second, "Metrics did not increment by expected amount")
 	})
 
 	t.Run("VerifyErrorMetrics", func(t *testing.T) {
-		resp := utils.SendChatRequest(t, "non-existent-model-xyz", messages)
+		nonExistentModel := "non-existent-model-xyz"
+		labels := map[string]string{
+			"model":       nonExistentModel,
+			"status_code": "404",
+		}
+
+		baselineMetrics, err := backendmetrics.ParseMetricsURL(defaultMetricsURL)
+		require.NoError(t, err, "Failed to fetch baseline metrics")
+
+		baselineErrorCount := getCounterValue(baselineMetrics, "kthena_router_requests_total", labels)
+
+		resp := utils.SendChatRequest(t, nonExistentModel, messages)
 		defer resp.Body.Close()
 		assert.Equal(t, 404, resp.StatusCode)
 
 		require.Eventually(t, func() bool {
-			metricsBody := fetchMetrics()
-			return strings.Contains(metricsBody, `model="non-existent-model-xyz"`)
-		}, 15*time.Second, time.Second, "Error model metric was not found in time")
+			currentMetrics, err := backendmetrics.ParseMetricsURL(defaultMetricsURL)
+			if err != nil {
+				return false
+			}
+
+			currentErrorCount := getCounterValue(currentMetrics, "kthena_router_requests_total", labels)
+			errorDelta := currentErrorCount - baselineErrorCount
+
+			t.Logf("Error count: baseline=%.0f, current=%.0f, difference=%.0f (expected 1)",
+				baselineErrorCount, currentErrorCount, errorDelta)
+
+			return errorDelta == 1
+		}, 15*time.Second, time.Second, "Error metric did not increment")
 	})
 }
 
@@ -957,27 +1032,35 @@ func TestRateLimitMetricsShared(t *testing.T, testCtx *routercontext.RouterTestC
 		}
 	})
 
-	fetchMetrics := func() string {
-		resp, err := http.Get("http://127.0.0.1:8080/metrics")
-		require.NoError(t, err, "Failed to fetch metrics")
-		defer resp.Body.Close()
-		body, err := io.ReadAll(resp.Body)
-		require.NoError(t, err, "Failed to read metrics response")
-		return string(body)
-	}
-
 	t.Run("VerifyRateLimitExceededMetrics", func(t *testing.T) {
 		messages := []utils.ChatMessage{
 			utils.NewChatMessage("user", "hello world"),
 		}
+		modelName := modelRoute.Spec.ModelName
+
+		rateLimitLabels := map[string]string{
+			"model": modelName,
+			"path":  "/v1/chat/completions",
+		}
+		requestLabels := map[string]string{
+			"model":       modelName,
+			"path":        "/v1/chat/completions",
+			"status_code": "429",
+		}
+
+		baselineMetrics, err := backendmetrics.ParseMetricsURL(defaultMetricsURL)
+		require.NoError(t, err, "Failed to fetch baseline metrics")
+
+		baselineRateLimitCount := getCounterValue(baselineMetrics, "kthena_router_rate_limit_exceeded_total", rateLimitLabels)
+		baselineRequestCount := getCounterValue(baselineMetrics, "kthena_router_requests_total", requestLabels)
 
 		// First request with retry to ensure route is ready
-		utils.CheckChatCompletions(t, modelRoute.Spec.ModelName, messages)
+		utils.CheckChatCompletions(t, modelName, messages)
 
 		// Subsequent requests without retry to capture 429 responses
 		var successCount, rateLimitedCount int
-		for i := 0; i < 10; i++ {
-			resp := utils.SendChatRequest(t, modelRoute.Spec.ModelName, messages)
+		for range 10 {
+			resp := utils.SendChatRequest(t, modelName, messages)
 			switch resp.StatusCode {
 			case 200:
 				successCount++
@@ -991,9 +1074,23 @@ func TestRateLimitMetricsShared(t *testing.T, testCtx *routercontext.RouterTestC
 		t.Logf("Requests: %d successful, %d rate-limited", successCount, rateLimitedCount)
 
 		require.Eventually(t, func() bool {
-			metricsBody := fetchMetrics()
-			return strings.Contains(metricsBody, "kthena_router_rate_limit_exceeded_total") &&
-				strings.Contains(metricsBody, fmt.Sprintf(`model="%s"`, modelRoute.Spec.ModelName))
-		}, 15*time.Second, time.Second, "Rate limit exceeded metrics were not found in time")
+			currentMetrics, err := backendmetrics.ParseMetricsURL(defaultMetricsURL)
+			if err != nil {
+				return false
+			}
+
+			currentRateLimitCount := getCounterValue(currentMetrics, "kthena_router_rate_limit_exceeded_total", rateLimitLabels)
+			currentRequestCount := getCounterValue(currentMetrics, "kthena_router_requests_total", requestLabels)
+
+			rateLimitDelta := currentRateLimitCount - baselineRateLimitCount
+			requestDelta := currentRequestCount - baselineRequestCount
+
+			t.Logf("Rate limit exceeded: baseline=%.0f, current=%.0f, difference=%.0f (expected %d)",
+				baselineRateLimitCount, currentRateLimitCount, rateLimitDelta, rateLimitedCount)
+			t.Logf("429 requests: baseline=%.0f, current=%.0f, difference=%.0f (expected %d)",
+				baselineRequestCount, currentRequestCount, requestDelta, rateLimitedCount)
+
+			return rateLimitDelta == float64(rateLimitedCount) && requestDelta == float64(rateLimitedCount)
+		}, 15*time.Second, time.Second, "Rate limit metrics did not match expected values")
 	})
 }
