@@ -97,11 +97,8 @@ func TestModelServingScaleUp(t *testing.T) {
 func TestModelServingPodRecovery(t *testing.T) {
 	ctx, kthenaClient := setupControllerManagerE2ETest(t)
 
-	// Create Kubernetes client locally (do NOT modify test suite)
-	kubeConfig, err := utils.GetKubeConfig()
-	require.NoError(t, err, "Failed to get kubeconfig")
-
-	kubeClient, err := kubernetes.NewForConfig(kubeConfig)
+	// Create Kubernetes client
+	kubeClient, err := utils.GetKubeClient()
 	require.NoError(t, err, "Failed to create Kubernetes client")
 
 	// Create a basic ModelServing
@@ -183,11 +180,8 @@ func TestModelServingPodRecovery(t *testing.T) {
 func TestModelServingServiceRecovery(t *testing.T) {
 	ctx, kthenaClient := setupControllerManagerE2ETest(t)
 
-	// Create Kubernetes client locally
-	kubeConfig, err := utils.GetKubeConfig()
-	require.NoError(t, err, "Failed to get kubeconfig")
-
-	kubeClient, err := kubernetes.NewForConfig(kubeConfig)
+	// Create Kubernetes client
+	kubeClient, err := utils.GetKubeClient()
 	require.NoError(t, err, "Failed to create Kubernetes client")
 
 	// Create a basic ModelServing
@@ -291,11 +285,8 @@ func TestModelServingServiceRecovery(t *testing.T) {
 func TestModelServingWithDuplicateHostAliases(t *testing.T) {
 	ctx, kthenaClient := setupControllerManagerE2ETest(t)
 
-	// Create Kubernetes client locally
-	kubeConfig, err := utils.GetKubeConfig()
-	require.NoError(t, err, "Failed to get kubeconfig")
-
-	kubeClient, err := kubernetes.NewForConfig(kubeConfig)
+	// Create Kubernetes client
+	kubeClient, err := utils.GetKubeClient()
 	require.NoError(t, err, "Failed to create Kubernetes client")
 
 	// Create a ModelServing with duplicate IP hostAliases
@@ -535,10 +526,7 @@ func TestModelServingControllerManagerRestart(t *testing.T) {
 	ctx, kthenaClient := setupControllerManagerE2ETest(t)
 
 	// Create Kubernetes client
-	kubeConfig, err := utils.GetKubeConfig()
-	require.NoError(t, err, "Failed to get kubeconfig")
-
-	kubeClient, err := kubernetes.NewForConfig(kubeConfig)
+	kubeClient, err := utils.GetKubeClient()
 	require.NoError(t, err, "Failed to create Kubernetes client")
 
 	// Create a complicated ModelServing with multiple roles
