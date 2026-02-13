@@ -269,9 +269,8 @@ func (g *GlobalRateLimiter) Tokens() float64 {
 
 	refillRate := g.getRefillRate()
 	expireSeconds := g.getExpireSeconds()
-	currentTime := float64(time.Now().Unix()) + float64(time.Now().Nanosecond())/1e9
 
-	result := g.client.Eval(ctx, luaScript, []string{key}, g.burst, refillRate, currentTime, expireSeconds)
+	result := g.client.Eval(ctx, luaScript, []string{key}, g.burst, refillRate, expireSeconds)
 
 	if result.Err() != nil {
 		klog.Errorf("failed to execute tokens check lua script: %v", result.Err())
