@@ -136,7 +136,11 @@ func (m *modelServer) getAllDecodePods() []types.NamespacedName {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
-	var result []types.NamespacedName
+	total := 0
+	for _, pdGroupPods := range m.pdGroups {
+		total += pdGroupPods.decodePods.Len()
+	}
+	result := make([]types.NamespacedName, 0, total)
 	for _, pdGroupPods := range m.pdGroups {
 		result = append(result, pdGroupPods.GetDecodePods()...)
 	}
@@ -148,7 +152,11 @@ func (m *modelServer) getAllPrefillPods() []types.NamespacedName {
 	m.mutex.RLock()
 	defer m.mutex.RUnlock()
 
-	var result []types.NamespacedName
+	total := 0
+	for _, pdGroupPods := range m.pdGroups {
+		total += pdGroupPods.prefillPods.Len()
+	}
+	result := make([]types.NamespacedName, 0, total)
 	for _, pdGroupPods := range m.pdGroups {
 		result = append(result, pdGroupPods.GetPrefillPods()...)
 	}
