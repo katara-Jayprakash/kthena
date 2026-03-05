@@ -330,7 +330,7 @@ func (s *store) AddRole(modelServingName types.NamespacedName, groupName, roleNa
 		group.roles[roleName] = make(map[string]*Role)
 	}
 
-	if _, exists := group.roles[roleName][roleID]; !exists {
+	if existing, exists := group.roles[roleName][roleID]; !exists || existing.Revision != revision {
 		group.roles[roleName][roleID] = &Role{
 			Name:     roleID,
 			Status:   RoleCreating,
