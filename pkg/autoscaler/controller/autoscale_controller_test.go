@@ -103,7 +103,7 @@ func TestToleranceHigh_then_DoScale_expect_NoUpdateActions(t *testing.T) {
 
 	lbs := map[string]string{}
 	pods := []*corev1.Pod{readyPod(ns, "pod-a", host, lbs)}
-	ac := &AutoscaleController{client: client, namespace: ns, modelServingLister: msLister, podsLister: fakePodLister{podsByNs: map[string][]*corev1.Pod{ns: pods}}, scalerMap: map[string]*autoscalerAutoscaler{}, optimizerMap: map[string]*autoscalerOptimizer{}}
+	ac := &AutoscaleController{client: client, modelServingLister: msLister, podsLister: fakePodLister{podsByNs: map[string][]*corev1.Pod{ns: pods}}, scalerMap: map[string]*autoscalerAutoscaler{}, optimizerMap: map[string]*autoscalerOptimizer{}}
 
 	if err := ac.doScale(context.Background(), binding, policy); err != nil {
 		t.Fatalf("doScale error: %v", err)
@@ -131,7 +131,7 @@ func TestHighLoad_then_DoScale_expect_Replicas10(t *testing.T) {
 
 	lbs := map[string]string{}
 	pods := []*corev1.Pod{readyPod(ns, "pod-up", host, lbs)}
-	ac := &AutoscaleController{client: client, namespace: ns, modelServingLister: msLister, podsLister: fakePodLister{podsByNs: map[string][]*corev1.Pod{ns: pods}}, scalerMap: map[string]*autoscalerAutoscaler{}, optimizerMap: map[string]*autoscalerOptimizer{}}
+	ac := &AutoscaleController{client: client, modelServingLister: msLister, podsLister: fakePodLister{podsByNs: map[string][]*corev1.Pod{ns: pods}}, scalerMap: map[string]*autoscalerAutoscaler{}, optimizerMap: map[string]*autoscalerOptimizer{}}
 
 	if err := ac.doScale(context.Background(), binding, policy); err != nil {
 		t.Fatalf("doScale error: %v", err)
@@ -167,7 +167,7 @@ func TestTwoBackends_then_DoOptimize_expect_UpdateActions(t *testing.T) {
 	lbsA := map[string]string{}
 	lbsB := map[string]string{}
 	pods := []*corev1.Pod{readyPod(ns, "pod-a", host, lbsA), readyPod(ns, "pod-b", host, lbsB)}
-	ac := &AutoscaleController{client: client, namespace: ns, modelServingLister: msLister, podsLister: fakePodLister{podsByNs: map[string][]*corev1.Pod{ns: pods}}, scalerMap: map[string]*autoscalerAutoscaler{}, optimizerMap: map[string]*autoscalerOptimizer{}}
+	ac := &AutoscaleController{client: client, modelServingLister: msLister, podsLister: fakePodLister{podsByNs: map[string][]*corev1.Pod{ns: pods}}, scalerMap: map[string]*autoscalerAutoscaler{}, optimizerMap: map[string]*autoscalerOptimizer{}}
 
 	if err := ac.doOptimize(context.Background(), binding, policy); err != nil {
 		t.Fatalf("doOptimize error: %v", err)
@@ -205,7 +205,7 @@ func TestTwoBackendsHighLoad_then_DoOptimize_expect_DistributionA5B4(t *testing.
 	lbsA := map[string]string{}
 	lbsB := map[string]string{}
 	pods := []*corev1.Pod{readyPod(ns, "pod-a2", host, lbsA), readyPod(ns, "pod-b2", host, lbsB)}
-	ac := &AutoscaleController{client: client, namespace: ns, modelServingLister: msLister, podsLister: fakePodLister{podsByNs: map[string][]*corev1.Pod{ns: pods}}, scalerMap: map[string]*autoscalerAutoscaler{}, optimizerMap: map[string]*autoscalerOptimizer{}}
+	ac := &AutoscaleController{client: client, modelServingLister: msLister, podsLister: fakePodLister{podsByNs: map[string][]*corev1.Pod{ns: pods}}, scalerMap: map[string]*autoscalerAutoscaler{}, optimizerMap: map[string]*autoscalerOptimizer{}}
 
 	if err := ac.doOptimize(context.Background(), binding, policy); err != nil {
 		t.Fatalf("doOptimize error: %v", err)
