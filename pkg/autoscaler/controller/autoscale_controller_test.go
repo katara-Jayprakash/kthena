@@ -232,3 +232,48 @@ func toInt32(s string) int32  { v, _ := strconv.Atoi(s); return int32(v) }
 
 type autoscalerAutoscaler = autoscaler.Autoscaler
 type autoscalerOptimizer = autoscaler.Optimizer
+
+func TestFormatScalerMapKey_IncludesNamespaceAndTarget(t *testing.T) {
+	targetRef := &corev1.ObjectReference{Name: "same-target", Kind: workload.ModelServingKind.Kind}
+
+	// Different namespaces, same binding name and target → distinct keys.
+	keyA := formatScalerMapKey("team-a", "shared-binding", targetRef)
+	keyB := formatScalerMapKey("team-b", "shared-binding", targetRef)
+	if keyA == keyB {
+		t.Fatalf("expected different scaler keys for different namespaces, got identical key %q", keyA)
+	}
+
+	// Same namespace and binding, different target names → distinct keys.
+	ref1 := &corev1.ObjectReference{Name: "target-1", Kind: workload.ModelServingKind.Kind}
+	ref2 := &corev1.ObjectReference{Name: "target-2", Kind: workload.ModelServingKind.Kind}
+	key1 := formatScalerMapKey("ns", "binding", ref1)
+	key2 := formatScalerMapKey("ns", "binding", ref2)
+	if key1 == key2 {
+		t.Fatalf("expected different scaler keys for different targets, got identical key %q", key1)
+	}
+
+	// Same namespace and binding, different target kinds → distinct keys.
+	refKindA := &corev1.ObjectReference{Name: "target", Kind: "KindA"}
+	refKindB := &corev1.ObjectReference{Name: "target", Kind: "KindB"}
+	keyKindA := formatScalerMapKey("ns", "binding", refKindA)
+	keyKindB := formatScalerMapKey("ns", "binding", refKindB)
+	if keyKindA == keyKindB {
+		t.Fatalf("expected different scaler keys for different target kinds, got identical key %q", keyKindA)
+	}
+}
+
+func TestFormatOptimizerMapKey_IncludesNamespace(t *testing.T) {
+	// Different namespaces, same binding name → distinct keys.
+	keyA := formatOptimizerMapKey("team-a", "shared-binding")
+	keyB := formatOptimizerMapKey("team-b", "shared-binding")
+	if keyA == keyB {
+		t.Fatalf("expected different optimizer keys for different namespaces, got identical key %q", keyA)
+	}
+
+	// Same namespace, different binding names → distinct keys.
+	key1 := formatOptimizerMapKey("ns", "binding-1")
+	key2 := formatOptimizerMapKey("ns", "binding-2")
+	if key1 == key2 {
+		t.Fatalf("expected different optimizer keys for different bindings, got identical key %q", key1)
+	}
+}
