@@ -140,9 +140,9 @@ func (ac *AutoscaleController) Reconcile(ctx context.Context) {
 			continue
 		}
 		if binding.Spec.HomogeneousTarget != nil {
-			scalerSet.Insert(formatAutoscalerMapKey(binding.Name, &binding.Spec.HomogeneousTarget.Target.TargetRef))
+			scalerSet.Insert(formatScalerMapKey(binding.Namespace, binding.Name, &binding.Spec.HomogeneousTarget.Target.TargetRef))
 		} else if binding.Spec.HeterogeneousTarget != nil {
-			optimizerSet.Insert(formatAutoscalerMapKey(binding.Name, nil))
+			optimizerSet.Insert(formatOptimizerMapKey(binding.Namespace, binding.Name))
 		} else {
 			klog.Warningf("Either homogeneous or heterogeneous not set, binding name: %s", binding.Name)
 		}
@@ -259,7 +259,7 @@ func (ac *AutoscaleController) schedule(ctx context.Context, binding *workload.A
 }
 
 func (ac *AutoscaleController) doOptimize(ctx context.Context, binding *workload.AutoscalingPolicyBinding, autoscalePolicy *workload.AutoscalingPolicy) error {
-	key := formatAutoscalerMapKey(binding.Name, nil)
+	key := formatOptimizerMapKey(binding.Namespace, binding.Name)
 	optimizer, ok := ac.optimizerMap[key]
 	if !ok || optimizer.NeedUpdate(autoscalePolicy, binding) {
 		optimizer = autoscaler.NewOptimizer(autoscalePolicy, binding)
@@ -301,7 +301,7 @@ func (ac *AutoscaleController) doOptimize(ctx context.Context, binding *workload
 
 func (ac *AutoscaleController) doScale(ctx context.Context, binding *workload.AutoscalingPolicyBinding, autoscalePolicy *workload.AutoscalingPolicy) error {
 	target := binding.Spec.HomogeneousTarget.Target
-	key := formatAutoscalerMapKey(binding.Name, &target.TargetRef)
+	key := formatScalerMapKey(binding.Namespace, binding.Name, &target.TargetRef)
 	scaler, ok := ac.scalerMap[key]
 	if !ok || scaler.NeedUpdate(autoscalePolicy, binding) {
 		scaler = autoscaler.NewAutoscaler(autoscalePolicy, binding)
@@ -342,12 +342,15 @@ func (ac *AutoscaleController) getAutoscalePolicy(autoscalingPolicyName string, 
 	return autoscalingPolicy, nil
 }
 
-func formatAutoscalerMapKey(bindingName string, targetRef *corev1.ObjectReference) string {
-	if targetRef == nil {
-		return bindingName
+// formatScalerMapKey builds the cache key for a homogeneous-target scaler.
+// It includes both the binding identity (namespace/name) and the target identity (kind/name).
+func formatScalerMapKey(bindingNamespace, bindingName string, targetRef *corev1.ObjectReference) string {
+	targetKind := targetRef.Kind
+	if targetKind == "" {
+		targetKind = workload.ModelServingKind.Kind
 	}
-	if targetRef.Kind == "" {
-		targetRef.Kind = workload.ModelServingKind.Kind
-	}
-	return bindingName + "#" + targetRef.Kind + "#" + targetRef.Name
+	return bindingNamespace + "/" + bindingName + "/" + targetKind + "/" + targetRef.Name
+}
+func formatOptimizerMapKey(bindingNamespace, bindingName string) string {
+	return bindingNamespace + "/" + bindingName
 }
