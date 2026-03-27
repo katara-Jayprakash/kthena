@@ -414,7 +414,12 @@ func SetCondition(ms *workloadv1alpha1.ModelServing, progressingGroups, updatedG
 	if ms.Spec.RolloutStrategy != nil && ms.Spec.RolloutStrategy.RollingUpdateConfiguration != nil && ms.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition != nil {
 		replicas := int(*ms.Spec.Replicas)
 		partitionValue, err := intstr.GetScaledValueFromIntOrPercent(ms.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition, replicas, true)
-		if err == nil {
+		if err != nil {
+			klog.ErrorS(err, "Failed to get partition from RollingUpdateConfiguration; defaulting to 0",
+				"modelServingNamespace", ms.Namespace,
+				"modelServingName", ms.Name,
+				"partition", ms.Spec.RolloutStrategy.RollingUpdateConfiguration.Partition.String())
+		} else {
 			partition = partitionValue
 		}
 	}

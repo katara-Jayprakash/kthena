@@ -278,14 +278,21 @@ func validateWorkerReplicas(ms *workloadv1alpha1.ModelServing) field.ErrorList {
 
 func validateIntOrPercent(value *intstr.IntOrString, fieldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
+	if value == nil {
+		return allErrs
+	}
 	switch value.Type {
 	case intstr.String:
 		for _, msg := range validation.IsValidPercent(value.StrVal) {
 			allErrs = append(allErrs, field.Invalid(fieldPath, value, msg))
 		}
-		// Converting percentages to int values(Only the % has been removed.)
-		percent, _ := strconv.Atoi(value.StrVal[:len(value.StrVal)-1])
-		if percent < 0 || percent > 100 {
+		if len(allErrs) > 0 {
+			break
+		}
+		// Strip trailing '%' and parse; IsValidPercent already ensures the format is valid.
+		percentStr := strings.TrimSuffix(value.StrVal, "%")
+		percent, err := strconv.Atoi(percentStr)
+		if err != nil || percent < 0 || percent > 100 {
 			allErrs = append(allErrs, field.Invalid(fieldPath, value, "must be a valid percent value (0-100)"))
 		}
 	case intstr.Int:

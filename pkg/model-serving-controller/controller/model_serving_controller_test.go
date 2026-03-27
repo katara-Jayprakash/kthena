@@ -271,6 +271,86 @@ func TestIsServingGroupOutdated(t *testing.T) {
 	}
 }
 
+// TestGetPartition tests the getPartition helper for both integer and percentage-based partitions.
+func TestGetPartition(t *testing.T) {
+	tests := []struct {
+		name      string
+		replicas  int32
+		partition *intstr.IntOrString
+		expected  int
+	}{
+		{
+			name:      "nil partition returns 0",
+			replicas:  5,
+			partition: nil,
+			expected:  0,
+		},
+		{
+			name:      "integer partition returned as-is",
+			replicas:  5,
+			partition: ptr.To(intstr.FromInt32(3)),
+			expected:  3,
+		},
+		{
+			name:      "50% of 3 replicas rounds up to 2",
+			replicas:  3,
+			partition: ptr.To(intstr.FromString("50%")),
+			expected:  2,
+		},
+		{
+			name:      "50% of 4 replicas is exactly 2",
+			replicas:  4,
+			partition: ptr.To(intstr.FromString("50%")),
+			expected:  2,
+		},
+		{
+			name:      "1% of 10 replicas rounds up to 1",
+			replicas:  10,
+			partition: ptr.To(intstr.FromString("1%")),
+			expected:  1,
+		},
+		{
+			name:      "100% of 5 replicas is 5",
+			replicas:  5,
+			partition: ptr.To(intstr.FromString("100%")),
+			expected:  5,
+		},
+		{
+			name:      "0% of 5 replicas is 0",
+			replicas:  5,
+			partition: ptr.To(intstr.FromString("0%")),
+			expected:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kubeClient := kubefake.NewSimpleClientset()
+			kthenaClient := kthenafake.NewSimpleClientset()
+			volcanoClient := volcanofake.NewSimpleClientset()
+
+			controller, err := NewModelServingController(kubeClient, kthenaClient, volcanoClient, apiextfake.NewSimpleClientset())
+			assert.NoError(t, err)
+
+			ms := &workloadv1alpha1.ModelServing{
+				Spec: workloadv1alpha1.ModelServingSpec{
+					Replicas: ptr.To[int32](tt.replicas),
+				},
+			}
+			if tt.partition != nil {
+				ms.Spec.RolloutStrategy = &workloadv1alpha1.RolloutStrategy{
+					RollingUpdateConfiguration: &workloadv1alpha1.RollingUpdateConfiguration{
+						Partition: tt.partition,
+					},
+				}
+			}
+
+			got := controller.getPartition(ms)
+			assert.Equal(t, tt.expected, got)
+		})
+	}
+}
+
 func TestIsServingGroupOutdatedOnIndexerError(t *testing.T) {
 	kubeClient := kubefake.NewSimpleClientset()
 	informerFactory := informers.NewSharedInformerFactory(kubeClient, 0)
