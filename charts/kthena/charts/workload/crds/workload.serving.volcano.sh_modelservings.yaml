@@ -86,7 +86,7 @@ spec:
                   type: object
                 type: array
               recoveryPolicy:
-                default: RoleRecreate
+                default: ServingGroupRecreate
                 description: RecoveryPolicy defines the recovery policy for the failed
                   Pod to be rebuilt
                 enum:
@@ -136,11 +136,11 @@ spec:
                         x-kubernetes-int-or-string: true
                     type: object
                   type:
-                    default: RoleRollingUpdate
+                    default: ServingGroupRollingUpdate
                     description: |-
                       Type defines the rollout strategy. Supported values are
                       "ServingGroupRollingUpdate" and "RoleRollingUpdate". If not specified,
-                      it defaults to "RoleRollingUpdate".
+                      it defaults to "ServingGroupRollingUpdate".
                     enum:
                     - ServingGroupRollingUpdate
                     - RoleRollingUpdate

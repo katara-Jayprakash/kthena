@@ -93,9 +93,9 @@ func GeneratePodName(groupName, roleName string, podIndex int) string {
 	return groupName + "-" + roleName + "-" + strconv.Itoa(podIndex)
 }
 
-func GenerateEntryPod(role workloadv1alpha1.Role, ms *workloadv1alpha1.ModelServing, groupName string, roleIndex int, revision, roleRevision string) *corev1.Pod {
+func GenerateEntryPod(role workloadv1alpha1.Role, ms *workloadv1alpha1.ModelServing, groupName string, roleIndex int, revision, roleTemplateHash string) *corev1.Pod {
 	entryPodName := GeneratePodName(groupName, GenerateRoleID(role.Name, roleIndex), 0)
-	entryPod := createBasePod(role, ms, entryPodName, groupName, revision, roleRevision, roleIndex)
+	entryPod := createBasePod(role, ms, entryPodName, groupName, revision, roleTemplateHash, roleIndex)
 	entryPod.ObjectMeta.Labels[workloadv1alpha1.EntryLabelKey] = Entry
 	addPodLabelAndAnnotation(entryPod, role.EntryTemplate.Metadata)
 	entryPod.Spec = role.EntryTemplate.Spec
@@ -122,7 +122,7 @@ func GenerateWorkerPod(role workloadv1alpha1.Role, ms *workloadv1alpha1.ModelSer
 	return workerPod
 }
 
-func createBasePod(role workloadv1alpha1.Role, ms *workloadv1alpha1.ModelServing, name, groupName, revision, roleRevision string, roleIndex int) *corev1.Pod {
+func createBasePod(role workloadv1alpha1.Role, ms *workloadv1alpha1.ModelServing, name, groupName, revision, roleTemplateHash string, roleIndex int) *corev1.Pod {
 	return &corev1.Pod{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Pod",
@@ -137,7 +137,7 @@ func createBasePod(role workloadv1alpha1.Role, ms *workloadv1alpha1.ModelServing
 				workloadv1alpha1.RoleLabelKey:             role.Name,
 				workloadv1alpha1.RoleIDKey:                GenerateRoleID(role.Name, roleIndex),
 				workloadv1alpha1.RevisionLabelKey:         revision,
-				workloadv1alpha1.RoleRevisionLabelKey:     roleRevision,
+				workloadv1alpha1.RoleTemplateHashLabelKey: roleTemplateHash,
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				newModelServingOwnerRef(ms),
@@ -313,8 +313,8 @@ func ObjectRevision(obj metav1.Object) string {
 	return obj.GetLabels()[workloadv1alpha1.RevisionLabelKey]
 }
 
-func ObjectRoleRevision(obj metav1.Object) string {
-	return obj.GetLabels()[workloadv1alpha1.RoleRevisionLabelKey]
+func ObjectRoleTemplateHash(obj metav1.Object) string {
+	return obj.GetLabels()[workloadv1alpha1.RoleTemplateHashLabelKey]
 }
 
 // GetRoleName returns the role name of the resource.

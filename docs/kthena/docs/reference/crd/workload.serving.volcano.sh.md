@@ -507,7 +507,7 @@ _Appears in:_
 | `plugins` _[PluginSpec](#pluginspec) array_ | Plugins defines optional plugin chain to customize serving pods. |  |  |
 | `template` _[ServingGroup](#servinggroup)_ | Template defines the template for ServingGroup |  |  |
 | `rolloutStrategy` _[RolloutStrategy](#rolloutstrategy)_ | RolloutStrategy defines the strategy that will be applied to update replicas |  |  |
-| `recoveryPolicy` _[RecoveryPolicy](#recoverypolicy)_ | RecoveryPolicy defines the recovery policy for the failed Pod to be rebuilt | RoleRecreate | Enum: [ServingGroupRecreate RoleRecreate None] <br /> |
+| `recoveryPolicy` _[RecoveryPolicy](#recoverypolicy)_ | RecoveryPolicy defines the recovery policy for the failed Pod to be rebuilt | ServingGroupRecreate | Enum: [ServingGroupRecreate RoleRecreate None] <br /> |
 
 
 #### ModelServingStatus
@@ -770,7 +770,7 @@ _Appears in:_
 
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
-| `type` _[RolloutStrategyType](#rolloutstrategytype)_ | Type defines the rollout strategy. Supported values are<br />"ServingGroupRollingUpdate" and "RoleRollingUpdate". If not specified,<br />it defaults to "RoleRollingUpdate". | RoleRollingUpdate | Enum: [ServingGroupRollingUpdate RoleRollingUpdate] <br /> |
+| `type` _[RolloutStrategyType](#rolloutstrategytype)_ | Type defines the rollout strategy. Supported values are<br />"ServingGroupRollingUpdate" and "RoleRollingUpdate". If not specified,<br />it defaults to "ServingGroupRollingUpdate". | ServingGroupRollingUpdate | Enum: [ServingGroupRollingUpdate RoleRollingUpdate] <br /> |
 | `rollingUpdateConfiguration` _[RollingUpdateConfiguration](#rollingupdateconfiguration)_ | RollingUpdateConfiguration defines the parameters to be used when type is RollingUpdateStrategyType.<br />optional |  |  |
 
 

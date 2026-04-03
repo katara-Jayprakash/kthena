@@ -1108,7 +1108,7 @@ func TestValidateRecoveryPolicyAndRolloutStrategy(t *testing.T) {
 			want: field.ErrorList(nil),
 		},
 		{
-			name: "no recovery policy and with role rollout strategy - valid",
+			name: "no recovery policy and with role rollout strategy - invalid (default recovery is ServingGroupRecreate)",
 			args: args{
 				ms: &workloadv1alpha1.ModelServing{
 					ObjectMeta: v1.ObjectMeta{
@@ -1127,33 +1127,11 @@ func TestValidateRecoveryPolicyAndRolloutStrategy(t *testing.T) {
 					},
 				},
 			},
-			want: field.ErrorList(nil),
-		},
-		{
-			name: "no recovery policy and with serving group rollout strategy - invalid",
-			args: args{
-				ms: &workloadv1alpha1.ModelServing{
-					ObjectMeta: v1.ObjectMeta{
-						Name: "test-model-serving",
-					},
-					Spec: workloadv1alpha1.ModelServingSpec{
-						Replicas: &replicas,
-						RolloutStrategy: &workloadv1alpha1.RolloutStrategy{
-							Type: workloadv1alpha1.ServingGroupRollingUpdate,
-						},
-						Template: workloadv1alpha1.ServingGroup{
-							Roles: []workloadv1alpha1.Role{
-								{Name: "role1", Replicas: &replicas, WorkerReplicas: 2},
-							},
-						},
-					},
-				},
-			},
 			want: field.ErrorList{
 				field.Invalid(
 					field.NewPath("spec").Child("rolloutStrategy").Child("type"),
-					workloadv1alpha1.ServingGroupRollingUpdate,
-					"recovery policy default is RoleRecreate, rolloutStrategy type ServingGroupRollingUpdate requires to be set to RoleRollingUpdate",
+					workloadv1alpha1.RoleRollingUpdate,
+					"incompatible recoveryPolicy and rolloutStrategy.type after applying defaults: recoveryPolicy=ServingGroupRecreate, rolloutStrategy.type=RoleRollingUpdate; valid pairs: (ServingGroupRecreate,ServingGroupRollingUpdate) or (RoleRecreate,RoleRollingUpdate)",
 				),
 			},
 		},
@@ -1204,35 +1182,6 @@ func TestValidateRecoveryPolicyAndRolloutStrategy(t *testing.T) {
 			want: field.ErrorList(nil),
 		},
 		{
-			name: "recovery policy ServingGroupRecreate with incompatible rollout strategy Role - invalid",
-			args: args{
-				ms: &workloadv1alpha1.ModelServing{
-					ObjectMeta: v1.ObjectMeta{
-						Name: "test-model-serving",
-					},
-					Spec: workloadv1alpha1.ModelServingSpec{
-						Replicas:       &replicas,
-						RecoveryPolicy: workloadv1alpha1.ServingGroupRecreate,
-						RolloutStrategy: &workloadv1alpha1.RolloutStrategy{
-							Type: workloadv1alpha1.RoleRollingUpdate,
-						},
-						Template: workloadv1alpha1.ServingGroup{
-							Roles: []workloadv1alpha1.Role{
-								{Name: "role1", Replicas: &replicas, WorkerReplicas: 2},
-							},
-						},
-					},
-				},
-			},
-			want: field.ErrorList{
-				field.Invalid(
-					field.NewPath("spec").Child("rolloutStrategy").Child("type"),
-					workloadv1alpha1.RoleRollingUpdate,
-					"rolloutStrategy type RoleRollingUpdate is incompatible with recoveryPolicy type ServingGroupRecreate",
-				),
-			},
-		},
-		{
 			name: "recovery policy RoleRecreate with incompatible rollout strategy ServingGroup - invalid",
 			args: args{
 				ms: &workloadv1alpha1.ModelServing{
@@ -1257,12 +1206,12 @@ func TestValidateRecoveryPolicyAndRolloutStrategy(t *testing.T) {
 				field.Invalid(
 					field.NewPath("spec").Child("rolloutStrategy").Child("type"),
 					workloadv1alpha1.ServingGroupRollingUpdate,
-					"rolloutStrategy type ServingGroupRollingUpdate is incompatible with recoveryPolicy type RoleRecreate",
+					"incompatible recoveryPolicy and rolloutStrategy.type after applying defaults: recoveryPolicy=RoleRecreate, rolloutStrategy.type=ServingGroupRollingUpdate; valid pairs: (ServingGroupRecreate,ServingGroupRollingUpdate) or (RoleRecreate,RoleRollingUpdate)",
 				),
 			},
 		},
 		{
-			name: "serving group recovery policy without rollout strategy - invalid",
+			name: "serving group recovery policy without rollout strategy - valid (default rollout is ServingGroupRollingUpdate)",
 			args: args{
 				ms: &workloadv1alpha1.ModelServing{
 					ObjectMeta: v1.ObjectMeta{
@@ -1279,13 +1228,7 @@ func TestValidateRecoveryPolicyAndRolloutStrategy(t *testing.T) {
 					},
 				},
 			},
-			want: field.ErrorList{
-				field.Invalid(
-					field.NewPath("spec").Child("recoveryPolicy"),
-					workloadv1alpha1.ServingGroupRecreate,
-					"RollingUpdate strategy default is 'RoleRollingUpdate', recoveryPolicy type ServingGroupRecreate requires recreate policy to be set to RoleRecreate",
-				),
-			},
+			want: field.ErrorList(nil),
 		},
 	}
 
@@ -1300,7 +1243,7 @@ func TestValidateRecoveryPolicyAndRolloutStrategy(t *testing.T) {
 			}
 
 			for i := range got {
-				assert.Equal(t, tt.want[i].Error(), got[i].Error(), "Error mismatch at index %d", i)
+				assert.Equalf(t, tt.want[i].Error(), got[i].Error(), "Error mismatch at index %d", i)
 			}
 		})
 	}

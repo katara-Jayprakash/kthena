@@ -457,6 +457,9 @@ func TestModelServingPodRecovery(t *testing.T) {
 	// Create a basic ModelServing
 	modelServing := createBasicModelServing("test-pod-recovery", 1, 0)
 	modelServing.Spec.RecoveryPolicy = workload.RoleRecreate
+	modelServing.Spec.RolloutStrategy = &workload.RolloutStrategy{
+		Type: workload.RoleRollingUpdate,
+	}
 
 	t.Log("Creating ModelServing for pod recovery test")
 	createAndWaitForModelServing(t, ctx, kthenaClient, modelServing)
@@ -1442,6 +1445,8 @@ func TestModelServingRoleBasedRollingUpdate(t *testing.T) {
 		LabelSelector: decodePodLabelSelector,
 	})
 	assert.NoError(t, err, "Failed to list decode pods before update")
+
+	assert.Equalf(t, 2, len(decodePodList.Items), "There should be 2 decode pods before update")
 	decodePodsUID := make(map[string]string, len(decodePodList.Items))
 	for _, pod := range decodePodList.Items {
 		decodePodsUID[pod.Name] = string(pod.UID)

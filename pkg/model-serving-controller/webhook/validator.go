@@ -375,32 +375,49 @@ func validateImageField(image string) error {
 
 func validateRecoveryPolicyAndRolloutStrategy(ms *workloadv1alpha1.ModelServing) field.ErrorList {
 	var allErrs field.ErrorList
-	if ms.Spec.RecoveryPolicy != "" && ms.Spec.RolloutStrategy != nil {
-		if (ms.Spec.RecoveryPolicy == workloadv1alpha1.ServingGroupRecreate && ms.Spec.RolloutStrategy.Type != workloadv1alpha1.ServingGroupRollingUpdate) ||
-			(ms.Spec.RecoveryPolicy == workloadv1alpha1.RoleRecreate && ms.Spec.RolloutStrategy.Type != workloadv1alpha1.RoleRollingUpdate) {
-			allErrs = append(allErrs, field.Invalid(
-				field.NewPath("spec").Child("rolloutStrategy").Child("type"),
-				ms.Spec.RolloutStrategy.Type,
-				fmt.Sprintf("rolloutStrategy type %s is incompatible with recoveryPolicy type %s", ms.Spec.RolloutStrategy.Type, ms.Spec.RecoveryPolicy),
-			))
+	// Effective defaults:
+	// - recoveryPolicy: ServingGroupRecreate
+	// - rolloutStrategy.type: ServingGroupRollingUpdate
+	// Required one-to-one mapping:
+	// - ServingGroupRecreate <-> ServingGroupRollingUpdate
+	// - RoleRecreate         <-> RoleRollingUpdate
+	effectiveRecoveryPolicy := ms.Spec.RecoveryPolicy
+	if effectiveRecoveryPolicy == "" {
+		effectiveRecoveryPolicy = workloadv1alpha1.ServingGroupRecreate
+	}
+
+	effectiveRolloutType := workloadv1alpha1.ServingGroupRollingUpdate
+	if ms.Spec.RolloutStrategy != nil {
+		effectiveRolloutType = ms.Spec.RolloutStrategy.Type
+		if effectiveRolloutType == "" {
+			effectiveRolloutType = workloadv1alpha1.ServingGroupRollingUpdate
 		}
 	}
 
-	if ms.Spec.RecoveryPolicy == "" && ms.Spec.RolloutStrategy != nil {
-		if ms.Spec.RolloutStrategy.Type == workloadv1alpha1.ServingGroupRollingUpdate {
-			allErrs = append(allErrs, field.Invalid(
-				field.NewPath("spec").Child("rolloutStrategy").Child("type"),
-				ms.Spec.RolloutStrategy.Type,
-				fmt.Sprintf("recovery policy default is RoleRecreate, rolloutStrategy type %s requires to be set to RoleRollingUpdate", ms.Spec.RolloutStrategy.Type),
-			))
-		}
-	}
+	matched := (effectiveRecoveryPolicy == workloadv1alpha1.ServingGroupRecreate && effectiveRolloutType == workloadv1alpha1.ServingGroupRollingUpdate) ||
+		(effectiveRecoveryPolicy == workloadv1alpha1.RoleRecreate && effectiveRolloutType == workloadv1alpha1.RoleRollingUpdate)
 
-	if ms.Spec.RolloutStrategy == nil && ms.Spec.RecoveryPolicy == workloadv1alpha1.ServingGroupRecreate {
+	if !matched {
+		// Point to the explicitly specified field when possible.
+		errPath := field.NewPath("spec").Child("rolloutStrategy").Child("type")
+		errValue := any(effectiveRolloutType)
+		if ms.Spec.RolloutStrategy == nil {
+			errPath = field.NewPath("spec").Child("recoveryPolicy")
+			errValue = effectiveRecoveryPolicy
+		}
+
 		allErrs = append(allErrs, field.Invalid(
-			field.NewPath("spec").Child("recoveryPolicy"),
-			ms.Spec.RecoveryPolicy,
-			fmt.Sprintf("RollingUpdate strategy default is 'RoleRollingUpdate', recoveryPolicy type %s requires recreate policy to be set to RoleRecreate", ms.Spec.RecoveryPolicy),
+			errPath,
+			errValue,
+			fmt.Sprintf(
+				"incompatible recoveryPolicy and rolloutStrategy.type after applying defaults: recoveryPolicy=%s, rolloutStrategy.type=%s; valid pairs: (%s,%s) or (%s,%s)",
+				effectiveRecoveryPolicy,
+				effectiveRolloutType,
+				workloadv1alpha1.ServingGroupRecreate,
+				workloadv1alpha1.ServingGroupRollingUpdate,
+				workloadv1alpha1.RoleRecreate,
+				workloadv1alpha1.RoleRollingUpdate,
+			),
 		))
 	}
 

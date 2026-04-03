@@ -151,7 +151,7 @@ func TestRemoveRoleReplicasForRoleRevision(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			originalReplicas := tt.input.Replicas
 
-			result := RemoveRoleReplicasForRoleRevision(tt.input)
+			result := RemoveRoleReplicasForRoleTemplateHash(tt.input)
 
 			assert.Nil(t, result.Replicas, "Expected result.Replicas to be nil")
 			assert.Equal(t, tt.expected.Name, result.Name, "Name should remain the same")
