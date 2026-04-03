@@ -342,19 +342,19 @@ func createFairnessQueueConfig() FairnessQueueConfig {
 		}
 	}
 
-	if v := os.Getenv("FAIRNESS_PRIORITY_ALPHA"); v != "" {
+	if v := os.Getenv("FAIRNESS_PRIORITY_TOKEN_WEIGHT"); v != "" {
 		if n, err := strconv.ParseFloat(v, 64); err == nil && isValidFairnessWeight(n) {
 			cfg.TokenWeight = n
 		} else {
-			klog.Warningf("Invalid FAIRNESS_PRIORITY_ALPHA: %q, using default %v", v, cfg.TokenWeight)
+			klog.Warningf("Invalid FAIRNESS_PRIORITY_TOKEN_WEIGHT: %q, using default %v", v, cfg.TokenWeight)
 		}
 	}
 
-	if v := os.Getenv("FAIRNESS_PRIORITY_BETA"); v != "" {
+	if v := os.Getenv("FAIRNESS_PRIORITY_REQUEST_NUM_WEIGHT"); v != "" {
 		if n, err := strconv.ParseFloat(v, 64); err == nil && isValidFairnessWeight(n) {
 			cfg.RequestNumWeight = n
 		} else {
-			klog.Warningf("Invalid FAIRNESS_PRIORITY_BETA: %q, using default %v", v, cfg.RequestNumWeight)
+			klog.Warningf("Invalid FAIRNESS_PRIORITY_REQUEST_NUM_WEIGHT: %q, using default %v", v, cfg.RequestNumWeight)
 		}
 	}
 

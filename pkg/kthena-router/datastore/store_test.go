@@ -45,8 +45,8 @@ func ptr[T any](v T) *T {
 }
 
 func TestCreateFairnessQueueConfig_RejectsInvalidWeights(t *testing.T) {
-	t.Setenv("FAIRNESS_PRIORITY_ALPHA", "NaN")
-	t.Setenv("FAIRNESS_PRIORITY_BETA", strconv.FormatFloat(math.Inf(1), 'f', -1, 64))
+	t.Setenv("FAIRNESS_PRIORITY_TOKEN_WEIGHT", "NaN")
+	t.Setenv("FAIRNESS_PRIORITY_REQUEST_NUM_WEIGHT", strconv.FormatFloat(math.Inf(1), 'f', -1, 64))
 
 	cfg := createFairnessQueueConfig()
 	defaultCfg := DefaultFairnessQueueConfig()
@@ -58,8 +58,8 @@ func TestCreateFairnessQueueConfig_RejectsInvalidWeights(t *testing.T) {
 		t.Fatalf("Expected default request weight %v, got %v", defaultCfg.RequestNumWeight, cfg.RequestNumWeight)
 	}
 
-	t.Setenv("FAIRNESS_PRIORITY_ALPHA", "-1")
-	t.Setenv("FAIRNESS_PRIORITY_BETA", "-2")
+	t.Setenv("FAIRNESS_PRIORITY_TOKEN_WEIGHT", "-1")
+	t.Setenv("FAIRNESS_PRIORITY_REQUEST_NUM_WEIGHT", "-2")
 	cfg = createFairnessQueueConfig()
 	if cfg.TokenWeight != defaultCfg.TokenWeight {
 		t.Fatalf("Expected default token weight for negative alpha, got %v", cfg.TokenWeight)
