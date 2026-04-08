@@ -19,6 +19,7 @@ package datastore
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand"
 	"net/http"
 	"os"
@@ -175,6 +176,8 @@ type Store interface {
 	GetTokenCount(userId, modelName string) (float64, error)
 	// UpdateTokenCount updates token usage for a user and model
 	UpdateTokenCount(userId, modelName string, inputTokens, outputTokens float64) error
+	// GetRequestCount returns the request count for a user and model in the current window
+	GetRequestCount(userId, modelName string) (int, error)
 
 	// Enqueue adds a request to the fair queue
 	Enqueue(*Request) error
@@ -279,6 +282,8 @@ type store struct {
 	// model -> RequestPriorityQueue
 	requestWaitingQueue sync.Map
 	tokenTracker        TokenTracker
+	rootCtx             context.Context // Lifecycle context for queue goroutines, set by Run()
+	fairnessQueueConfig FairnessQueueConfig
 }
 
 func New() Store {
@@ -297,11 +302,72 @@ func New() Store {
 		initialSynced:       &atomic.Bool{},
 		requestWaitingQueue: sync.Map{},
 		// Create token tracker with environment-based configuration
-		tokenTracker: createTokenTracker(),
+		tokenTracker:        createTokenTracker(),
+		fairnessQueueConfig: createFairnessQueueConfig(),
 	}
 }
 
+// createFairnessQueueConfig reads fairness queue configuration from environment variables.
+func createFairnessQueueConfig() FairnessQueueConfig {
+	cfg := DefaultFairnessQueueConfig()
+
+	if v := os.Getenv("FAIRNESS_MAX_CONCURRENT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.MaxConcurrent = n
+		} else {
+			klog.Warningf("Invalid FAIRNESS_MAX_CONCURRENT: %q, using default %d", v, cfg.MaxConcurrent)
+		}
+	}
+
+	if v := os.Getenv("FAIRNESS_MAX_QPS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.MaxQPS = n
+		} else {
+			klog.Warningf("Invalid FAIRNESS_MAX_QPS: %q, using default %d", v, cfg.MaxQPS)
+		}
+	}
+
+	if v := os.Getenv("FAIRNESS_PRIORITY_REFRESH_RETRIES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			cfg.MaxPriorityRefreshRetries = n
+		} else {
+			klog.Warningf("Invalid FAIRNESS_PRIORITY_REFRESH_RETRIES: %q, using default %d", v, cfg.MaxPriorityRefreshRetries)
+		}
+	}
+
+	if v := os.Getenv("FAIRNESS_REBUILD_THRESHOLD"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			cfg.RebuildThreshold = n
+		} else {
+			klog.Warningf("Invalid FAIRNESS_REBUILD_THRESHOLD: %q, using default %d", v, cfg.RebuildThreshold)
+		}
+	}
+
+	if v := os.Getenv("FAIRNESS_PRIORITY_TOKEN_WEIGHT"); v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil && isValidFairnessWeight(n) {
+			cfg.TokenWeight = n
+		} else {
+			klog.Warningf("Invalid FAIRNESS_PRIORITY_TOKEN_WEIGHT: %q, using default %v", v, cfg.TokenWeight)
+		}
+	}
+
+	if v := os.Getenv("FAIRNESS_PRIORITY_REQUEST_NUM_WEIGHT"); v != "" {
+		if n, err := strconv.ParseFloat(v, 64); err == nil && isValidFairnessWeight(n) {
+			cfg.RequestNumWeight = n
+		} else {
+			klog.Warningf("Invalid FAIRNESS_PRIORITY_REQUEST_NUM_WEIGHT: %q, using default %v", v, cfg.RequestNumWeight)
+		}
+	}
+
+	return cfg
+}
+
+func isValidFairnessWeight(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0
+}
+
 func (s *store) Run(ctx context.Context) {
+	s.rootCtx = ctx
 	go func() {
 		for {
 			select {
@@ -329,6 +395,10 @@ func (s *store) UpdateTokenCount(userID, model string, inputTokens, outputTokens
 	return s.tokenTracker.UpdateTokenCount(userID, model, inputTokens, outputTokens)
 }
 
+func (s *store) GetRequestCount(userID, model string) (int, error) {
+	return s.tokenTracker.GetRequestCount(userID, model)
+}
+
 func (s *store) Enqueue(req *Request) error {
 	modelName := req.ModelName
 	var queue *RequestPriorityQueue
@@ -336,10 +406,15 @@ func (s *store) Enqueue(req *Request) error {
 	if ok {
 		queue, _ = val.(*RequestPriorityQueue)
 	} else {
-		newQueue := NewRequestPriorityQueue(nil)
+		newQueue := NewRequestPriorityQueueWithConfig(nil, s.fairnessQueueConfig, s.tokenTracker)
 		val, ok = s.requestWaitingQueue.LoadOrStore(modelName, newQueue)
 		if !ok {
-			go newQueue.Run(context.TODO(), defaultQueueQPS)
+			queueCtx := s.rootCtx
+			if queueCtx == nil {
+				klog.Warning("store.Enqueue called before Run(); using background context for queue")
+				queueCtx = context.Background()
+			}
+			go newQueue.Run(queueCtx, s.fairnessQueueConfig.MaxQPS)
 		}
 		queue, _ = val.(*RequestPriorityQueue)
 	}
@@ -980,12 +1055,19 @@ func matchString(sm *aiv1alpha1.StringMatch, value string) bool {
 }
 
 func (s *store) selectDestination(targets []*aiv1alpha1.TargetModel) (*aiv1alpha1.TargetModel, error) {
+	if len(targets) == 0 {
+		return nil, fmt.Errorf("no target models specified in rule")
+	}
+
 	weightedSlice, err := toWeightedSlice(targets)
 	if err != nil {
 		return nil, err
 	}
 
-	index := selectFromWeightedSlice(weightedSlice)
+	index, err := selectFromWeightedSlice(weightedSlice)
+	if err != nil {
+		return nil, err
+	}
 
 	return targets[index], nil
 }
@@ -1014,22 +1096,32 @@ func toWeightedSlice(targets []*aiv1alpha1.TargetModel) ([]uint32, error) {
 	return res, nil
 }
 
-func selectFromWeightedSlice(weights []uint32) int {
+func selectFromWeightedSlice(weights []uint32) (int, error) {
+	if len(weights) == 0 {
+		return 0, fmt.Errorf("no weights provided")
+	}
+
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+
 	totalWeight := 0
 	for _, weight := range weights {
 		totalWeight += int(weight)
 	}
 
-	randomNum := rand.Intn(totalWeight)
+	if totalWeight == 0 {
+		return 0, fmt.Errorf("total weight is zero")
+	}
+
+	randomNum := rng.Intn(totalWeight)
 
 	for i, weight := range weights {
 		randomNum -= int(weight)
 		if randomNum < 0 {
-			return i
+			return i, nil
 		}
 	}
 
-	return 0
+	return 0, nil
 }
 
 func (s *store) updatePodMetrics(pod *PodInfo) {
