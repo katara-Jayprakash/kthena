@@ -779,7 +779,7 @@ _Appears in:_
 _Underlying type:_ _string_
 
 RolloutStrategyType defines the strategy to use to update replicas.
-Note that if `recoveryPolicy` is set to `servingGroupRecreate` and `rolloutStrategyType` is set to `roleRollingUpdate`,
+Note that if `recoveryPolicy` is set to `ServingGroupRecreate` and `rolloutStrategyType` is set to `RoleRollingUpdate`,
 the entire servingGroup will be deleted during a rolling update because the outdated role is removed.
 
 

@@ -1233,7 +1233,6 @@ func (c *ModelServingController) handleReadyPod(ms *workloadv1alpha1.ModelServin
 	roleName := utils.GetRoleName(newPod)
 	roleID := utils.GetRoleID(newPod)
 	roleTemplateHash := c.resolveRoleTemplateHash(ms, roleName, newPod)
-
 	c.store.AddRunningPodToServingGroup(types.NamespacedName{
 		Namespace: ms.Namespace,
 		Name:      ms.Name,
@@ -1274,29 +1273,6 @@ func (c *ModelServingController) handleReadyPod(ms *workloadv1alpha1.ModelServin
 		klog.V(4).Infof("ServingGroup %s still creating", servingGroupName)
 	}
 	return nil
-}
-
-// resolveRoleTemplateHash resolves role template hash from pod labels first.
-// For backward compatibility with legacy pods that do not carry
-// workloadv1alpha1.RoleTemplateHashLabelKey, it falls back to calculating
-// the hash from the matching role in ModelServing spec.
-func (c *ModelServingController) resolveRoleTemplateHash(ms *workloadv1alpha1.ModelServing, roleName string, obj metav1.Object) string {
-	roleTemplateHash := utils.ObjectRoleTemplateHash(obj)
-	if roleTemplateHash != "" {
-		return roleTemplateHash
-	}
-
-	for _, role := range ms.Spec.Template.Roles {
-		if role.Name != roleName {
-			continue
-		}
-		fallbackHash := utils.CalRoleTemplateHash(role)
-		klog.V(4).Infof("roleTemplateHash label missing on object %s/%s, fallback to calculated hash for role %s", obj.GetNamespace(), obj.GetName(), roleName)
-		return fallbackHash
-	}
-
-	klog.Warningf("roleTemplateHash label missing on object %s/%s and role %s not found in ModelServing %s/%s spec", obj.GetNamespace(), obj.GetName(), roleName, ms.Namespace, ms.Name)
-	return ""
 }
 
 func (c *ModelServingController) handleErrorPod(ms *workloadv1alpha1.ModelServing, servingGroupName string, errPod *corev1.Pod) error {
@@ -2249,6 +2225,90 @@ func (c *ModelServingController) createOrUpdatePodGroupByServingGroup(ctx contex
 	return nil
 }
 
+// resolveRoleTemplateHash resolves role template hash from labels first.
+// For legacy pods without roleTemplateHash label, fallback to:
+// 1. get pod revision from labels
+// 2. find corresponding ControllerRevision
+// 3. hash the matched role from ControllerRevision
+// If any step fails, return empty string and let rolling update handle reconciliation.
+func (c *ModelServingController) resolveRoleTemplateHash(ms *workloadv1alpha1.ModelServing, roleName string, obj metav1.Object) string {
+	roleTemplateHash := utils.ObjectRoleTemplateHash(obj)
+	if roleTemplateHash != "" {
+		return roleTemplateHash
+	}
+
+	revision := utils.ObjectRevision(obj)
+	if revision == "" {
+		klog.V(4).Infof("roleTemplateHash and revision labels are missing on object %s/%s, leave roleTemplateHash empty", obj.GetNamespace(), obj.GetName())
+		return ""
+	}
+
+	if c == nil || c.kubeClientSet == nil {
+		klog.V(4).Infof("kube client is nil when resolving roleTemplateHash for object %s/%s, leave empty", obj.GetNamespace(), obj.GetName())
+		return ""
+	}
+
+	resolvedHash, ok := c.resolveRoleTemplateHashFromRevision(ms, revision, roleName)
+	if ok {
+		return resolvedHash
+	}
+
+	klog.V(4).Infof("role %s not found in ControllerRevision %s for ModelServing %s/%s, leave roleTemplateHash empty", roleName, revision, ms.Namespace, ms.Name)
+	return ""
+}
+
+// resolveRoleTemplateHashFromRevision resolves roleTemplateHash from a revision's ControllerRevision.
+// Returns (hash, true) when resolved, otherwise ("", false).
+func (c *ModelServingController) resolveRoleTemplateHashFromRevision(ms *workloadv1alpha1.ModelServing, revision, roleName string) (string, bool) {
+	if c == nil || c.kubeClientSet == nil || revision == "" {
+		return "", false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cr, err := utils.GetControllerRevision(ctx, c.kubeClientSet, ms, revision)
+	if err != nil {
+		klog.Warningf("failed to get ControllerRevision %s for ModelServing %s/%s: %v", revision, ms.Namespace, ms.Name, err)
+		return "", false
+	}
+	if cr == nil {
+		return "", false
+	}
+
+	roles, err := utils.GetRolesFromControllerRevision(cr)
+	if err != nil {
+		klog.Warningf("failed to parse roles from ControllerRevision %s for ModelServing %s/%s: %v", revision, ms.Namespace, ms.Name, err)
+		return "", false
+	}
+
+	for _, role := range roles {
+		if role.Name == roleName {
+			return utils.CalRoleTemplateHash(role), true
+		}
+	}
+
+	return "", false
+}
+
+// resolveRoleTemplateHashForComparison resolves role template hash used for outdated-role comparison.
+// Priority:
+// 1. Use hash stored in datastore role directly.
+// 2. If missing (legacy data), infer from the ServingGroup's ControllerRevision.
+// Returns (hash, true) when hash is resolved, otherwise ("", false).
+func (c *ModelServingController) resolveRoleTemplateHashForComparison(
+	ms *workloadv1alpha1.ModelServing,
+	servingGroup datastore.ServingGroup,
+	roleName string,
+	role datastore.Role,
+) (string, bool) {
+	if role.RoleTemplateHash != "" {
+		return role.RoleTemplateHash, true
+	}
+
+	return c.resolveRoleTemplateHashFromRevision(ms, servingGroup.Revision, roleName)
+}
+
 // findOutdatedRolesInServingGroups finds outdated roles in serving groups and returns a map of serving group names to outdated role names
 // If a serving group has no outdated roles, it updates the serving group's revision in the store
 func (c *ModelServingController) findOutdatedRolesInServingGroups(ms *workloadv1alpha1.ModelServing, servingGroups []datastore.ServingGroup, revision string) map[string][]string {
@@ -2258,8 +2318,7 @@ func (c *ModelServingController) findOutdatedRolesInServingGroups(ms *workloadv1
 	expectedroleTemplateHashs := make(map[string]string)
 	newRoleNames := make(map[string]bool)
 	for _, role := range ms.Spec.Template.Roles {
-		copy := utils.RemoveRoleReplicasForRoleTemplateHash(role)
-		roleTemplateHash := utils.Revision(copy)
+		roleTemplateHash := utils.CalRoleTemplateHash(role)
 		expectedroleTemplateHashs[role.Name] = roleTemplateHash
 		newRoleNames[role.Name] = true
 	}
@@ -2279,9 +2338,16 @@ func (c *ModelServingController) findOutdatedRolesInServingGroups(ms *workloadv1
 			// Check if any instance of this role type is outdated
 			hasOutdatedRole := false
 			for _, role := range roles {
+				observedRoleTemplateHash, ok := c.resolveRoleTemplateHashForComparison(ms, sg, roleName, role)
+				if !ok {
+					// Legacy upgrade compatibility: missing roleTemplateHash should not trigger forced restart
+					// when we cannot safely infer historical template.
+					klog.Warningf("skip outdated check for role %s/%s in ServingGroup %s because roleTemplateHash is missing and cannot be inferred", roleName, role.Name, sg.Name)
+					continue
+				}
 				// If the role revision in the store is different from the expected revision and
 				// the role is not already being deleted, it's outdated
-				if role.RoleTemplateHash != roleTemplateHash && role.Status != datastore.RoleDeleting {
+				if observedRoleTemplateHash != roleTemplateHash && role.Status != datastore.RoleDeleting {
 					hasOutdatedRole = true
 					break
 				}

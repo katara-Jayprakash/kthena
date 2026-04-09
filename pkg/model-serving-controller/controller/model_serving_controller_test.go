@@ -6162,75 +6162,6 @@ func TestHandleReadyPodRoleStatusUpdate(t *testing.T) {
 	}
 }
 
-func TestResolveRoleTemplateHash(t *testing.T) {
-	controller := &ModelServingController{}
-	roleName := "prefill"
-
-	ms := &workloadv1alpha1.ModelServing{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      "test-ms",
-		},
-		Spec: workloadv1alpha1.ModelServingSpec{
-			Template: workloadv1alpha1.ServingGroup{
-				Roles: []workloadv1alpha1.Role{
-					{
-						Name:           roleName,
-						Replicas:       ptr.To[int32](1),
-						WorkerReplicas: 1,
-						EntryTemplate: workloadv1alpha1.PodTemplateSpec{
-							Spec: corev1.PodSpec{
-								Containers: []corev1.Container{{Name: "main", Image: "nginx:latest"}},
-							},
-						},
-						WorkerTemplate: &workloadv1alpha1.PodTemplateSpec{
-							Spec: corev1.PodSpec{
-								Containers: []corev1.Container{{Name: "worker", Image: "busybox:latest"}},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	t.Run("use label value when present", func(t *testing.T) {
-		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      "test-pod-1",
-			Labels: map[string]string{
-				workloadv1alpha1.RoleTemplateHashLabelKey: "hash-from-label",
-			},
-		}}
-
-		got := controller.resolveRoleTemplateHash(ms, roleName, pod)
-		assert.Equal(t, "hash-from-label", got)
-	})
-
-	t.Run("fallback to calculated hash when label missing", func(t *testing.T) {
-		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      "test-pod-2",
-			Labels:    map[string]string{},
-		}}
-
-		expected := utils.CalRoleTemplateHash(ms.Spec.Template.Roles[0])
-		got := controller.resolveRoleTemplateHash(ms, roleName, pod)
-		assert.Equal(t, expected, got)
-	})
-
-	t.Run("return empty when role not found in spec", func(t *testing.T) {
-		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
-			Namespace: "default",
-			Name:      "test-pod-3",
-			Labels:    map[string]string{},
-		}}
-
-		got := controller.resolveRoleTemplateHash(ms, "decode", pod)
-		assert.Equal(t, "", got)
-	})
-}
-
 func TestDeleteServingGroupRollbackOnFailure(t *testing.T) {
 	tests := []struct {
 		name                  string
@@ -6905,4 +6836,145 @@ func TestFindOutdatedRolesInServingGroups(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFindOutdatedRolesInServingGroups_LegacyMissingRoleTemplateHash(t *testing.T) {
+	ns := "default"
+	msName := "test-ms"
+	revision := "same-revision"
+	roleName := "prefill"
+
+	ms := &workloadv1alpha1.ModelServing{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns,
+			Name:      msName,
+		},
+		Spec: workloadv1alpha1.ModelServingSpec{
+			Replicas: ptr.To[int32](1),
+			Template: workloadv1alpha1.ServingGroup{
+				Roles: []workloadv1alpha1.Role{
+					{
+						Name:     roleName,
+						Replicas: ptr.To[int32](1),
+						EntryTemplate: workloadv1alpha1.PodTemplateSpec{
+							Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Image: "nginx"}}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	store := datastore.New()
+	nsn := types.NamespacedName{Namespace: ns, Name: msName}
+	store.AddServingGroup(nsn, 0, revision)
+	store.AddRole(nsn, "test-ms-0", roleName, "prefill-0", revision, "")
+
+	controller := &ModelServingController{store: store}
+	result := controller.findOutdatedRolesInServingGroups(ms, []datastore.ServingGroup{{Name: "test-ms-0", Revision: revision, Status: datastore.ServingGroupRunning}}, revision)
+
+	assert.Empty(t, result, "legacy role with missing roleTemplateHash should not be treated as outdated by default")
+}
+
+func TestResolveRoleTemplateHashForComparison_FromControllerRevision(t *testing.T) {
+	ns := "default"
+	msName := "test-ms"
+	oldRevision := "old-revision"
+	roleName := "prefill"
+
+	oldRole := workloadv1alpha1.Role{
+		Name:     roleName,
+		Replicas: ptr.To[int32](1),
+		EntryTemplate: workloadv1alpha1.PodTemplateSpec{
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Image: "nginx:1.25"}}},
+		},
+	}
+
+	ms := &workloadv1alpha1.ModelServing{
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: ns,
+			Name:      msName,
+		},
+		Spec: workloadv1alpha1.ModelServingSpec{
+			Template: workloadv1alpha1.ServingGroup{
+				Roles: []workloadv1alpha1.Role{oldRole},
+			},
+		},
+	}
+
+	kubeClient := kubefake.NewSimpleClientset()
+	_, err := utils.CreateControllerRevision(context.TODO(), kubeClient, ms, oldRevision, []workloadv1alpha1.Role{oldRole})
+	assert.NoError(t, err)
+
+	controller := &ModelServingController{kubeClientSet: kubeClient}
+	hash, ok := controller.resolveRoleTemplateHashForComparison(
+		ms,
+		datastore.ServingGroup{Name: "test-ms-0", Revision: oldRevision},
+		roleName,
+		datastore.Role{Name: "prefill-0", RoleTemplateHash: ""},
+	)
+
+	assert.True(t, ok)
+	assert.Equal(t, utils.CalRoleTemplateHash(oldRole), hash)
+}
+
+func TestResolveRoleTemplateHash_UsesPodRevisionControllerRevision(t *testing.T) {
+	ns := "default"
+	msName := "test-ms"
+	revision := "old-revision"
+	roleName := "prefill"
+
+	oldRole := workloadv1alpha1.Role{
+		Name:     roleName,
+		Replicas: ptr.To[int32](1),
+		EntryTemplate: workloadv1alpha1.PodTemplateSpec{
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{Name: "main", Image: "nginx:1.25"}}},
+		},
+	}
+
+	ms := &workloadv1alpha1.ModelServing{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: msName},
+		Spec: workloadv1alpha1.ModelServingSpec{
+			Template: workloadv1alpha1.ServingGroup{Roles: []workloadv1alpha1.Role{oldRole}},
+		},
+	}
+
+	kubeClient := kubefake.NewSimpleClientset()
+	_, err := utils.CreateControllerRevision(context.TODO(), kubeClient, ms, revision, []workloadv1alpha1.Role{oldRole})
+	assert.NoError(t, err)
+
+	controller := &ModelServingController{kubeClientSet: kubeClient}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Namespace: ns,
+		Name:      "test-pod",
+		Labels: map[string]string{
+			workloadv1alpha1.RevisionLabelKey: revision,
+		},
+	}}
+
+	hash := controller.resolveRoleTemplateHash(ms, roleName, pod)
+	assert.Equal(t, utils.CalRoleTemplateHash(oldRole), hash)
+}
+
+func TestResolveRoleTemplateHash_ReturnsEmptyWhenControllerRevisionNotFound(t *testing.T) {
+	ns := "default"
+	msName := "test-ms"
+	revision := "missing-revision"
+	roleName := "prefill"
+
+	ms := &workloadv1alpha1.ModelServing{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ns, Name: msName},
+	}
+
+	controller := &ModelServingController{kubeClientSet: kubefake.NewSimpleClientset()}
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Namespace: ns,
+		Name:      "test-pod",
+		Labels: map[string]string{
+			workloadv1alpha1.RevisionLabelKey: revision,
+		},
+	}}
+
+	hash := controller.resolveRoleTemplateHash(ms, roleName, pod)
+	assert.Equal(t, "", hash)
 }
