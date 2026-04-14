@@ -57,6 +57,7 @@ spec:
                   - "prefill"
                   - "--disaggregation-transfer-backend"
                   - "mooncake"
+                  - "--enable-metrics"
                 env:
                   - name: POD_IP
                     valueFrom:
@@ -119,6 +120,7 @@ spec:
                   - "decode"
                   - "--disaggregation-transfer-backend"
                   - "mooncake"
+                  - "--enable-metrics"
                 env:
                   - name: POD_IP
                     valueFrom:
