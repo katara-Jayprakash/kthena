@@ -805,7 +805,7 @@ func (c *ModelServingController) manageRole(ctx context.Context, ms *workloadv1a
 			continue
 		}
 		_, servingGroupOrdinal := utils.GetParentNameAndOrdinal(servingGroup.Name)
-		isPartitionProtected := partition > 0 && servingGroupOrdinal < partition
+		isPartitionProtected := partition > 0 && servingGroupOrdinal >= 0 && servingGroupOrdinal < partition
 
 		rolesToManage := ms.Spec.Template.Roles
 		revisionToUse := newRevision

@@ -20,8 +20,6 @@ import (
 	"context"
 	"fmt"
 	"math/rand"
-	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -40,6 +38,7 @@ import (
 
 	clientset "github.com/volcano-sh/kthena/client-go/clientset/versioned"
 	workload "github.com/volcano-sh/kthena/pkg/apis/workload/v1alpha1"
+	controllerutils "github.com/volcano-sh/kthena/pkg/model-serving-controller/utils"
 	"github.com/volcano-sh/kthena/test/e2e/utils"
 )
 
@@ -1316,7 +1315,7 @@ func TestModelServingPartitionDeletedGroupHistoricalRevision(t *testing.T) {
 
 	targetOrdinal := 1
 	targetGroupName := fmt.Sprintf("%s-%d", modelServing.Name, targetOrdinal)
-	labelSelector := fmt.Sprintf("modelserving.volcano.sh/group-name=%s", targetGroupName)
+	labelSelector := fmt.Sprintf("%s=%s", workload.GroupNameLabelKey, targetGroupName)
 
 	pods, err := kubeClient.CoreV1().Pods(testNamespace).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector,
@@ -1476,8 +1475,8 @@ func collectRunningServingGroupStates(ctx context.Context, kubeClient *kubernete
 		if groupName == "" {
 			continue
 		}
-		ordinal, ok := parseServingGroupOrdinal(groupName, msName)
-		if !ok {
+		parentName, ordinal := controllerutils.GetParentNameAndOrdinal(groupName)
+		if parentName != msName || ordinal < 0 {
 			continue
 		}
 		revision := pod.Labels[workload.RevisionLabelKey]
@@ -1501,18 +1500,6 @@ func collectRunningServingGroupStates(ctx context.Context, kubeClient *kubernete
 	return states, nil
 }
 
-func parseServingGroupOrdinal(groupName, msName string) (int, bool) {
-	prefix := msName + "-"
-	if !strings.HasPrefix(groupName, prefix) {
-		return 0, false
-	}
-	ordinal, err := strconv.Atoi(strings.TrimPrefix(groupName, prefix))
-	if err != nil {
-		return 0, false
-	}
-	return ordinal, true
-}
-
 func waitForPartitionState(t *testing.T, ctx context.Context, kthenaClient *clientset.Clientset,
 	kubeClient *kubernetes.Clientset, msName string, partition, replicas int32, initialRevision string) string {
 	t.Helper()
@@ -1526,6 +1513,10 @@ func waitForPartitionState(t *testing.T, ctx context.Context, kthenaClient *clie
 		ordinalStates, err := collectRunningServingGroupStates(ctx, kubeClient, msName)
 		if err != nil {
 			t.Logf("Failed to collect serving group states: %v", err)
+			return false
+		}
+		if len(ordinalStates) != int(replicas) {
+			t.Logf("Running serving group count: %d (expecting %d)", len(ordinalStates), replicas)
 			return false
 		}
 		protectedCorrect, updatedCorrect := verifyPartitionState(t, ordinalStates, partition, replicas, initialRevision, ms.Status.UpdateRevision)
@@ -1548,12 +1539,8 @@ func waitForPartitionState(t *testing.T, ctx context.Context, kthenaClient *clie
 func verifyPartitionState(t *testing.T, ordinalStates map[int32]servingGroupState,
 	partition, replicas int32, currentRevision, updateRevision string) (protectedCorrect, updatedCorrect int) {
 	t.Helper()
-	for ordinal := int32(0); ordinal < replicas; ordinal++ {
-		state, ok := ordinalStates[ordinal]
-		if !ok {
-			continue
-		}
-		isProtected := ordinal < partition
+	for ordinal, state := range ordinalStates {
+		isProtected := partition > 0 && ordinal < partition
 		if isProtected && state.Revision == currentRevision && state.Image == nginxImage {
 			protectedCorrect++
 		} else if !isProtected && state.Revision == updateRevision && state.Image == nginxAlpineImage {
