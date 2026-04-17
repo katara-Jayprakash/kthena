@@ -31,11 +31,13 @@ import (
 // if all expected replicas are available.
 func WaitForModelServingReady(t *testing.T, ctx context.Context, kthenaClient *clientset.Clientset, namespace, name string) {
 	t.Log("Waiting for ModelServing to be ready...")
-	err := wait.PollUntilContextTimeout(ctx, 5*time.Second, 5*time.Minute, true, func(ctx context.Context) (bool, error) {
+	timeoutCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	err := wait.PollUntilContextTimeout(timeoutCtx, 5*time.Second, 5*time.Minute, true, func(ctx context.Context) (bool, error) {
 		ms, err := kthenaClient.WorkloadV1alpha1().ModelServings(namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil {
 			t.Logf("Error getting ModelServing %s, retrying: %v", name, err)
-			return false, nil
+			return false, err
 		}
 		// Check if all replicas are available
 		expectedReplicas := int32(1)
