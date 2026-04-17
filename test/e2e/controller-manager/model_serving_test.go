@@ -1387,20 +1387,47 @@ func TestModelServingRollingUpdate(t *testing.T) {
 
 	verifyAllPodsHaveImage(t, ctx, kubeClient, labelSelector, nginxAlpineImage, "after update")
 
-	finalMS, err := kthenaClient.WorkloadV1alpha1().ModelServings(testNamespace).Get(ctx, modelServing.Name, metav1.GetOptions{})
-	require.NoError(t, err)
-	require.NotEmpty(t, finalMS.Status.UpdateRevision, "UpdateRevision should be set after rollout")
+	// Poll until the rolling update has fully converged. ServingGroupRollingUpdate creates
+	// new groups at maxOrdinal+1 and deletes old ones, so ordinals shift during the rollout
+	// and Status.AvailableReplicas alone can transiently reach the desired count before the
+	// controller has finished creating the final group. Assert on the steady state instead.
+	var finalMS *workload.ModelServing
+	require.Eventually(t, func() bool {
+		ms, err := kthenaClient.WorkloadV1alpha1().ModelServings(testNamespace).Get(ctx, modelServing.Name, metav1.GetOptions{})
+		if err != nil {
+			return false
+		}
+		if ms.Status.UpdateRevision == "" ||
+			ms.Status.UpdateRevision == initialRevision ||
+			ms.Status.CurrentRevision != ms.Status.UpdateRevision {
+			return false
+		}
+		if ms.Status.Replicas != replicas ||
+			ms.Status.AvailableReplicas != replicas ||
+			ms.Status.UpdatedReplicas != replicas {
+			t.Logf("Replicas: %d, AvailableReplicas: %d, UpdatedReplicas: %d (expecting %d)",
+				ms.Status.Replicas, ms.Status.AvailableReplicas, ms.Status.UpdatedReplicas, replicas)
+			return false
+		}
+		ordinalStates, err := collectRunningServingGroupStates(ctx, kubeClient, modelServing.Name)
+		if err != nil {
+			t.Logf("Failed to collect serving group states: %v", err)
+			return false
+		}
+		if len(ordinalStates) != int(replicas) {
+			t.Logf("Running serving group count: %d (expecting %d)", len(ordinalStates), replicas)
+			return false
+		}
+		for ordinal, state := range ordinalStates {
+			if state.Revision != ms.Status.UpdateRevision || state.Image != nginxAlpineImage {
+				t.Logf("Ordinal %d not on UpdateRevision yet: revision=%s image=%s", ordinal, state.Revision, state.Image)
+				return false
+			}
+		}
+		finalMS = ms
+		return true
+	}, 3*time.Minute, 2*time.Second, "Rolling update did not converge")
 
-	assert.Equal(t, finalMS.Status.CurrentRevision, finalMS.Status.UpdateRevision)
-	assert.NotEqual(t, initialRevision, finalMS.Status.UpdateRevision)
-
-	ordinalStates, err := collectRunningServingGroupStates(ctx, kubeClient, modelServing.Name)
-	require.NoError(t, err)
-	require.Len(t, ordinalStates, int(replicas), "Expected one running group per replica after rollout")
-	for ordinal, state := range ordinalStates {
-		assert.Equalf(t, finalMS.Status.UpdateRevision, state.Revision, "Ordinal %d should use UpdateRevision without partition", ordinal)
-		assert.Equalf(t, nginxAlpineImage, state.Image, "Ordinal %d should run the updated image without partition", ordinal)
-	}
 	t.Logf("Rolling update completed - CurrentRevision: %s", finalMS.Status.CurrentRevision)
 }
 
