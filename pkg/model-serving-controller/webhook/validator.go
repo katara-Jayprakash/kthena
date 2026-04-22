@@ -89,6 +89,7 @@ func (v *ModelServingValidator) validateModelServing(modelServing *workloadv1alp
 	allErrs = append(allErrs, validateRollingUpdateConfiguration(modelServing)...)
 	allErrs = append(allErrs, validateGangPolicy(modelServing)...)
 	allErrs = append(allErrs, validateWorkerReplicas(modelServing)...)
+	allErrs = append(allErrs, validateRecoveryPolicyAndRolloutStrategy(modelServing)...)
 
 	if len(allErrs) > 0 {
 		var messages []string
@@ -208,15 +209,16 @@ func validateGangPolicy(ms *workloadv1alpha1.ModelServing) field.ErrorList {
 	minRoleReplicasPath := field.NewPath("spec").Child("template").Child("gangPolicy").Child("minRoleReplicas")
 
 	// Create a map of role names for quick lookup
-	roleNames := make(map[string]bool)
+	roleMap := make(map[string]workloadv1alpha1.Role)
 	for _, role := range ms.Spec.Template.Roles {
-		roleNames[role.Name] = true
+		roleMap[role.Name] = role
 	}
 
 	// Validate each minRoleReplicas entry
 	for roleName, minReplicas := range minRoleReplicas {
 		// Check if the role exists
-		if !roleNames[roleName] {
+		roleElement, ok := roleMap[roleName]
+		if !ok {
 			allErrs = append(allErrs, field.Invalid(
 				minRoleReplicasPath.Key(roleName),
 				roleName,
@@ -225,35 +227,30 @@ func validateGangPolicy(ms *workloadv1alpha1.ModelServing) field.ErrorList {
 			continue
 		}
 
-		// Find the role to check its actual replicas
-		for _, role := range ms.Spec.Template.Roles {
-			if role.Name == roleName {
-				/// Calculate total replicas for this role
-				// minRoleReplicas is compared against the number of Role replicas
-				replicas := int32(1)
-				if role.Replicas != nil {
-					replicas = *role.Replicas
-				}
+		// Find the role in the roleMap then check its actual replicas
+		// Calculate total replicas for this role
+		// minRoleReplicas is compared against the number of Role replicas
+		replicas := int32(1)
+		if roleElement.Replicas != nil {
+			replicas = *roleElement.Replicas
+		}
 
-				// Validate minReplicas doesn't exceed total replicas
-				if minReplicas > replicas {
-					allErrs = append(allErrs, field.Invalid(
-						minRoleReplicasPath.Key(roleName),
-						minReplicas,
-						fmt.Sprintf("minRoleReplicas (%d) for role %s cannot exceed replicas (%d)", minReplicas, roleName, replicas),
-					))
-				}
+		// Validate minReplicas doesn't exceed total replicas
+		if minReplicas > replicas {
+			allErrs = append(allErrs, field.Invalid(
+				minRoleReplicasPath.Key(roleName),
+				minReplicas,
+				fmt.Sprintf("minRoleReplicas (%d) for role %s cannot exceed replicas (%d)", minReplicas, roleName, replicas),
+			))
+		}
 
-				// Validate minReplicas is non-negative
-				if minReplicas < 0 {
-					allErrs = append(allErrs, field.Invalid(
-						minRoleReplicasPath.Key(roleName),
-						minReplicas,
-						fmt.Sprintf("minRoleReplicas for role %s must be non-negative", roleName),
-					))
-				}
-				break
-			}
+		// Validate minReplicas is non-negative
+		if minReplicas < 0 {
+			allErrs = append(allErrs, field.Invalid(
+				minRoleReplicasPath.Key(roleName),
+				minReplicas,
+				fmt.Sprintf("minRoleReplicas for role %s must be non-negative", roleName),
+			))
 		}
 	}
 
@@ -370,4 +367,53 @@ func validateImageField(image string) error {
 	}
 
 	return nil
+}
+
+func validateRecoveryPolicyAndRolloutStrategy(ms *workloadv1alpha1.ModelServing) field.ErrorList {
+	var allErrs field.ErrorList
+	// Effective defaults:
+	// - recoveryPolicy: RoleRecreate
+	// - rolloutStrategy.type: ServingGroupRollingUpdate
+	// Required one-to-one mapping not be:
+	// - ServingGroupRecreate <-> roleRollingUpdate
+	effectiveRecoveryPolicy := ms.Spec.RecoveryPolicy
+	if effectiveRecoveryPolicy == "" {
+		effectiveRecoveryPolicy = workloadv1alpha1.RoleRecreate
+	}
+
+	effectiveRolloutType := workloadv1alpha1.ServingGroupRollingUpdate
+	if ms.Spec.RolloutStrategy != nil {
+		effectiveRolloutType = ms.Spec.RolloutStrategy.Type
+		if effectiveRolloutType == "" {
+			effectiveRolloutType = workloadv1alpha1.ServingGroupRollingUpdate
+		}
+	}
+
+	unMatched := (effectiveRecoveryPolicy == workloadv1alpha1.ServingGroupRecreate && effectiveRolloutType == workloadv1alpha1.RoleRollingUpdate)
+
+	if unMatched {
+		// Point to the explicitly specified field when possible.
+		errPath := field.NewPath("spec").Child("rolloutStrategy").Child("type")
+		errValue := any(effectiveRolloutType)
+		if ms.Spec.RolloutStrategy == nil {
+			errPath = field.NewPath("spec").Child("recoveryPolicy")
+			errValue = effectiveRecoveryPolicy
+		}
+
+		allErrs = append(allErrs, field.Invalid(
+			errPath,
+			errValue,
+			fmt.Sprintf(
+				"incompatible recoveryPolicy and rolloutStrategy.type after applying defaults: recoveryPolicy=%s, rolloutStrategy.type=%s; valid pairs: (%s,%s) or (%s,%s)",
+				effectiveRecoveryPolicy,
+				effectiveRolloutType,
+				workloadv1alpha1.ServingGroupRecreate,
+				workloadv1alpha1.ServingGroupRollingUpdate,
+				workloadv1alpha1.RoleRecreate,
+				workloadv1alpha1.RoleRollingUpdate,
+			),
+		))
+	}
+
+	return allErrs
 }

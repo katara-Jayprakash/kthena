@@ -78,6 +78,7 @@ const sidebars: SidebarsConfig = {
           items: [
             'user-guide/router-routing',
             'user-guide/config-router',
+            'user-guide/fairness-scheduling',
             'user-guide/rate-limit',
             "user-guide/gateway-api-support",
             'user-guide/gateway-inference-extension-support',
@@ -101,6 +102,8 @@ const sidebars: SidebarsConfig = {
           },
           items: [
             'user-guide/prefill-decode-disaggregation/vllm-ascend-mooncake',
+            'user-guide/prefill-decode-disaggregation/sglang-pd-disaggregation',
+            'user-guide/prefill-decode-disaggregation/vllm-pd-disaggregation',
           ],
         },
       ],
