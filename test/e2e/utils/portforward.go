@@ -349,6 +349,9 @@ func (f *forwarder) buildK8sPortForwarder(readyCh chan struct{}) (*portforward.P
 	if pod.Status.Phase != v1.PodRunning {
 		return nil, fmt.Errorf("pod is not running. Status=%v", pod.Status.Phase)
 	}
+	if pod.DeletionTimestamp != nil {
+		return nil, fmt.Errorf("pod %s/%s is terminating", pod.Namespace, pod.Name)
+	}
 
 	return fw, nil
 }
