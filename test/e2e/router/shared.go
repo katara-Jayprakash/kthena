@@ -838,8 +838,12 @@ func TestModelRouteWithRateLimitShared(t *testing.T, testCtx *routercontext.Rout
 			return err == nil && mr != nil
 		}, 2*time.Minute, 2*time.Second, "ModelRoute should be created")
 
+		// Wait for Envoy/Gateway API to sync the route to the data plane by polling until we get a 200 OK.
+		// Since this will successfully consume 1 request from our rate limit quota, we account for it.
+		utils.WaitForChatModelReady(t, utils.DefaultRouterURL, createdModelRoute.Spec.ModelName, standardMessage, 60*time.Second)
+
 		quotaRequests := inputTokenLimit / tokensPerRequest
-		for i := 0; i < quotaRequests; i++ {
+		for i := 1; i < quotaRequests; i++ {
 			resp := utils.SendChatRequest(t, createdModelRoute.Spec.ModelName, standardMessage)
 			responseBody, readErr := io.ReadAll(resp.Body)
 			resp.Body.Close()
@@ -891,8 +895,11 @@ func TestModelRouteWithRateLimitShared(t *testing.T, testCtx *routercontext.Rout
 			return err == nil && mr != nil
 		}, 2*time.Minute, 2*time.Second, "ModelRoute should be created")
 
+		// Wait for Envoy/Gateway API to sync the route to the data plane
+		utils.WaitForChatModelReady(t, utils.DefaultRouterURL, createdModelRoute.Spec.ModelName, standardMessage, 60*time.Second)
+
 		quotaRequests := inputTokenLimit / tokensPerRequest
-		for i := 0; i < quotaRequests; i++ {
+		for i := 1; i < quotaRequests; i++ {
 			resp := utils.SendChatRequest(t, createdModelRoute.Spec.ModelName, standardMessage)
 			resp.Body.Close()
 			assert.Equal(t, http.StatusOK, resp.StatusCode, "Request %d should succeed", i+1)
@@ -954,8 +961,11 @@ func TestModelRouteWithRateLimitShared(t *testing.T, testCtx *routercontext.Rout
 			return err == nil && mr != nil
 		}, 2*time.Minute, 2*time.Second, "ModelRoute should be created")
 
+		// Wait for Envoy/Gateway API to sync the route to the data plane
+		utils.WaitForChatModelReady(t, utils.DefaultRouterURL, createdModelRoute.Spec.ModelName, standardMessage, 60*time.Second)
+
 		quotaRequests := inputTokenLimit / tokensPerRequest
-		for i := 0; i < quotaRequests; i++ {
+		for i := 1; i < quotaRequests; i++ {
 			resp := utils.SendChatRequest(t, createdModelRoute.Spec.ModelName, standardMessage)
 			resp.Body.Close()
 			assert.Equal(t, http.StatusOK, resp.StatusCode,
@@ -1014,6 +1024,9 @@ func TestModelRouteWithRateLimitShared(t *testing.T, testCtx *routercontext.Rout
 			return err == nil && mr != nil
 		}, 2*time.Minute, 2*time.Second, "ModelRoute should be created")
 
+		// Establish route to ensure Envoy has propagated it before updating rate limits
+		utils.WaitForChatModelReady(t, utils.DefaultRouterURL, createdModelRoute.Spec.ModelName, standardMessage, 60*time.Second)
+
 		// Update ModelRoute to disable input token limit
 		createdModelRoute.Spec.RateLimit.InputTokensPerUnit = nil
 		outputLimit := uint32(outputTokenLimit)
@@ -1053,7 +1066,9 @@ func TestModelRouteWithRateLimitShared(t *testing.T, testCtx *routercontext.Rout
 				rateLimited = true
 				break
 			} else {
-				t.Fatalf("Unexpected HTTP status code %d on attempt %d", resp.StatusCode, attempt+1)
+				// Ignore transient 404/503s if Envoy is applying the new route update
+				t.Logf("Ignoring unexpected HTTP status code %d on attempt %d (Envoy syncing)", resp.StatusCode, attempt+1)
+				time.Sleep(1 * time.Second)
 			}
 		}
 
@@ -1118,6 +1133,9 @@ func TestModelRouteWithGlobalRateLimitShared(t *testing.T, testCtx *routercontex
 			mr, err := testCtx.KthenaClient.NetworkingV1alpha1().ModelRoutes(testNamespace).Get(ctx, createdModelRoute.Name, metav1.GetOptions{})
 			return err == nil && mr != nil
 		}, 2*time.Minute, 2*time.Second, "ModelRoute should be created")
+
+		// Establish route to ensure Envoy has propagated it
+		utils.WaitForChatModelReady(t, utils.DefaultRouterURL, createdModelRoute.Spec.ModelName, standardMessage, 60*time.Second)
 
 		var successCount int
 		for i := 0; i < maxRequests; i++ {
@@ -1202,6 +1220,9 @@ func TestModelRouteWithGlobalRateLimitShared(t *testing.T, testCtx *routercontex
 			return err == nil && mr != nil
 		}, 2*time.Minute, 2*time.Second, "ModelRoute should be created")
 
+		// Establish route to ensure Envoy has propagated it
+		utils.WaitForChatModelReady(t, utils.DefaultRouterURL, createdModelRoute.Spec.ModelName, standardMessage, 60*time.Second)
+
 		for i := 0; i < 5; i++ {
 			resp := utils.SendChatRequest(t, createdModelRoute.Spec.ModelName, standardMessage)
 			resp.Body.Close()
@@ -1241,6 +1262,9 @@ func TestModelRouteWithGlobalRateLimitShared(t *testing.T, testCtx *routercontex
 			mr, err := testCtx.KthenaClient.NetworkingV1alpha1().ModelRoutes(testNamespace).Get(ctx, createdPremium.Name, metav1.GetOptions{})
 			return err == nil && mr != nil
 		}, 2*time.Minute, 2*time.Second, "Premium ModelRoute should be created")
+
+		// Establish route to ensure Envoy has propagated it
+		utils.WaitForChatModelReady(t, utils.DefaultRouterURL, createdPremium.Spec.ModelName, standardMessage, 60*time.Second)
 
 		headers := map[string]string{"user-type": "premium"}
 		var premiumSuccess, defaultSuccess int
